@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=gaussian_diffusion_v1
 #SBATCH --account=lp_emediaxr
-#SBATCH --time=12:00:00
+#SBATCH --time=8:00:00
 #SBATCH --clusters=wice
 #SBATCH --partition=gpu_a100
 #SBATCH --nodes=1
@@ -18,4 +18,4 @@ source "$VSC_DATA/miniconda3/etc/profile.d/conda.sh"
 conda activate /vsc-hard-mounts/leuven-data/366/vsc36675/txgs/.conda
 cd /data/leuven/366/vsc36675/txgs/
 
-python -u main2.py
+python -u training.py

@@ -15,7 +15,7 @@ from utils.image_utils import render_and_save
 CONFIG = {
     "data_dir": "./data/small/",
     "output_dir": "./output/",
-    "batch_size": 64,            # Small physical batch size
+    "batch_size": 256,            # Small physical batch size
     "grad_accumulation": 4,     # Effective batch size = 192 (48 * 4)
     "model": {
         "input_dim": 8,
@@ -31,6 +31,8 @@ CONFIG = {
     },
     "diffusion_steps": 500,
 }
+
+SAMPLE_SAVE_RATE = 100
 
 # --- Utils: Learning Rate Schedule ---
 def get_warmup_cosine_scheduler(optimizer, warmup_epochs, max_epochs):
@@ -236,7 +238,7 @@ def main():
             print(f"--> New best model saved (Loss: {best_loss:.4f})")
 
         # Periodic Sampling
-        if epoch % 50 == 0:
+        if epoch % SAMPLE_SAVE_RATE == 0:
             sample_and_render(model, diffusion_scheduler, device, num_samples=3, epoch=epoch)
             
         # Periodic Save

@@ -18,4 +18,4 @@ source "$VSC_DATA/miniconda3/etc/profile.d/conda.sh"
 conda activate /vsc-hard-mounts/leuven-data/366/vsc36675/txgs/.conda
 cd /data/leuven/366/vsc36675/txgs/
 
-python -u main2.py
+python -u training.py
