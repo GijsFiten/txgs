@@ -224,3 +224,4 @@ output/
 wandb/
 
 *.pth
+slurm*

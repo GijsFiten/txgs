@@ -15,21 +15,21 @@ from utils.image_utils import render_and_save
 CONFIG = {
     "data_dir": "./data/small/",
     "output_dir": "./output/",
-    "batch_size": 256,            # Small physical batch size
+    "batch_size": 16,            # Small physical batch size
     "grad_accumulation": 4,     # Effective batch size = 192 (48 * 4)
     "model": {
         "input_dim": 8,
-        "model_dim": 256,
-        "n_heads": 4,
-        "n_layers": 4,
+        "model_dim": 512,
+        "n_heads": 8,
+        "n_layers": 8,
     },
     "train": {
         "max_epochs": 3000,
-        "base_lr": 5e-4,        # Slightly lower max LR for stability
-        "warmup_epochs": 50,   # Warmup to prevent shock
-        "clip_norm": 2,
+        "base_lr": 2e-4,        # Slightly lower max LR for stability
+        "warmup_epochs": 100,   # Warmup to prevent shock
+        "clip_norm": 3,
     },
-    "diffusion_steps": 500,
+    "diffusion_steps": 1000,
 }
 
 SAMPLE_SAVE_RATE = 100
@@ -207,8 +207,6 @@ def main():
 
     # 4. Logging
     wandb.init(project="gaussian-diffusion", config=CONFIG)
-    wandb.watch(model, log="all", log_freq=100) # Watch gradients to debug issues
-
     best_loss = float('inf')
 
     # --- Main Loop ---
@@ -220,22 +218,24 @@ def main():
         # Step LR Scheduler (once per epoch)
         lr_scheduler.step()
         current_lr = optimizer.param_groups[0]['lr']
+        
+        # Checkpointing
+        if avg_loss < best_loss:
+            best_loss = avg_loss
 
+            if epoch > 50:
+                torch.save(model.state_dict(), "best_gaussian_diffusion.pth")
+                print(f"--> New best model saved (Loss: {best_loss:.4f})")
+            
         # Log
         wandb.log({
             "epoch": epoch, 
             "loss": avg_loss, 
-            "learning_rate": current_lr
+            "learning_rate": current_lr,
+            "best_loss": best_loss
         })
         print(f"Epoch {epoch}/{CONFIG['train']['max_epochs']} | Loss: {avg_loss:.4f} | LR: {current_lr:.6f}")
-
-        # Checkpointing
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            if epoch > 50:
-                torch.save(model.state_dict(), "best_gaussian_diffusion.pth")
-            wandb.log({"best_loss": best_loss})
-            print(f"--> New best model saved (Loss: {best_loss:.4f})")
+            
 
         # Periodic Sampling
         if epoch % SAMPLE_SAVE_RATE == 0:

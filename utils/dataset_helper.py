@@ -101,8 +101,8 @@ def create_dataloaders(data_dir, batch_size=32, num_points=1000):
         dataset, 
         batch_size=batch_size,
         shuffle=True,       # Shuffle for training
-        num_workers=4,      # Parallel loading
-        pin_memory=True,    # Faster transfer to CUDA
+        num_workers=2,      # Parallel loading
+        pin_memory=False,    # Faster transfer to CUDA
         drop_last=True      # Drop incomplete batch at end
     )
     

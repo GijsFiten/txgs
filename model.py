@@ -28,7 +28,6 @@ class GaussianDiffusionTransformer(nn.Module):
             nhead=n_heads, 
             dim_feedforward=model_dim*4, # Usually d_model * 4 is standard
             batch_first=True,
-            norm_first=True # often stabilizes training
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
         
