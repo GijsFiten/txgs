@@ -6,7 +6,7 @@
 #SBATCH --partition=gpu_a100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-node=1
 #SBATCH --mem=16G
 #SBATCH --output=slurm-%j.out
@@ -20,4 +20,4 @@ conda activate /data/leuven/366/vsc36675/txgs/.conda
 nvidia-smi
 nvcc -V
 
-python -u training.py
+python -u diffusion_training.py

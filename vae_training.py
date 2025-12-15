@@ -15,7 +15,7 @@ from utils.image_utils import render_and_save
 CONFIG = {
     "data_dir": "./data/chairs_1k/",
     "output_dir": "./output/",
-    "batch_size": 16,
+    "batch_size": 128,
     "grad_accumulation": 3,
     "model": {
         "num_gaussians": 1000,
@@ -23,12 +23,11 @@ CONFIG = {
         "model_dim": 512,
     },
     "train": {
-        "max_epochs": 3000,
-        "base_lr": 1e-3,        # Slightly lower max LR for stability
-        "warmup_epochs": 100,   # Warmup to prevent shock
+        "max_epochs": 5000,
+        "base_lr": 1e-4,       
+        "warmup_epochs": 100,
         "clip_norm": 2,
     },
-    "diffusion_steps": 1000,
 }
 
 SAMPLE_SAVE_RATE = 100

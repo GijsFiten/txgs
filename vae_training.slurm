@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=gaussian_diffusion_v2
 #SBATCH --account=lp_emediaxr
-#SBATCH --time=0:03:00
+#SBATCH --time=4:00:00
 #SBATCH --clusters=wice
 #SBATCH --partition=gpu_a100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-node=1
 #SBATCH --mem=16G
 #SBATCH --output=slurm-%j.out
@@ -20,4 +20,4 @@ conda activate /data/leuven/366/vsc36675/txgs/.conda
 nvidia-smi
 nvcc -V
 
-python -u training.py
+python -u vae_training.py
