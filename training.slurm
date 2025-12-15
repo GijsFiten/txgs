@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=gaussian_diffusion_v1
+#SBATCH --job-name=gaussian_diffusion_v2
 #SBATCH --account=lp_emediaxr
 #SBATCH --time=0:03:00
 #SBATCH --clusters=wice

@@ -15,7 +15,7 @@ from utils.image_utils import render_and_save
 CONFIG = {
     "data_dir": "./data/small/",
     "output_dir": "./output/",
-    "batch_size": 16,            # Small physical batch size
+    "batch_size": 128,            # Small physical batch size
     "grad_accumulation": 4,     # Effective batch size = 192 (48 * 4)
     "model": {
         "input_dim": 8,
