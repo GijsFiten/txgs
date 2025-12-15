@@ -8,14 +8,14 @@ from .diffusion_data_helper import normalize_data
 from .gaussian_file_helper import load_gaussians
 
 class GaussianSplatDataset(Dataset):
-    def __init__(self, data_dir, device="cpu", augment=True):
+    def __init__(self, data_dir, device="cpu", augment=False):
         """
         Args:
             data_dir (str): Path to folder containing .npz files
             device (str): Device for temporary loading ('cpu' recommended for dataloader)
             augment (bool): Whether to apply data augmentation
         """
-        self.file_paths = glob.glob(os.path.join(data_dir, "*.npz"))
+        self.file_paths = glob.glob(os.path.join(data_dir, "*.npz"))[:1]
         self.device = device
         self.augment = augment
         

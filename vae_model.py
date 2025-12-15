@@ -169,7 +169,9 @@ class GaussianVAE(nn.Module):
     
     def forward(self, x):
         mu, logvar = self.encode(x)
-        z = self.reparameterize(mu, logvar)
+        # z = self.reparameterize(mu, logvar)
+        # OVERFIT
+        z = mu
         x_recon = self.decode(z)
         return x_recon, mu, logvar
     
@@ -220,7 +222,7 @@ def vae_loss(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001):
     
     return total_loss, recon_loss, kl_loss
 
-def vae_loss_sinkhorn(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001):
+def vae_loss_sinkhorn(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001, sinkhorn_epsilon=0.001):
     B, N, C = x.shape
     
     # 1. Compute Cost Matrix based on XY ONLY (Indices 0 and 1)
@@ -234,7 +236,7 @@ def vae_loss_sinkhorn(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001)
     
     # 2. Compute Soft Permutation Matrix (P) using Sinkhorn
     # epsilon controls "hardness": 0.01 is sharper, 0.1 is softer/more stable
-    P = sinkhorn_matching(dist_xy, epsilon=0.1, max_iter=20) # [B, N, N]
+    P = sinkhorn_matching(dist_xy, epsilon=sinkhorn_epsilon, max_iter=50) # [B, N, N]
     
     # 3. Permute Ground Truth to match Prediction
     # We want x_matched[b, i] to be the point in x[b] that matches x_recon[b, i]

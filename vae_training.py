@@ -15,7 +15,7 @@ from utils.image_utils import render_and_save
 CONFIG = {
     "data_dir": "./data/chairs_1k/",
     "output_dir": "./output/",
-    "batch_size": 128,
+    "batch_size": 1,
     "grad_accumulation": 3,
     "model": {
         "num_gaussians": 1000,
@@ -93,6 +93,9 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, kl_weight=0.001
     epoch_recon_loss = 0
     epoch_kl_loss = 0
     valid_batches = 0
+
+    # Anneal Epsilon: 0.1 -> 0.0005
+    sinkhorn_eps = max(0.0005, 0.1 * (0.99 ** epoch))
     
     # Progress bar for the epoch
     pbar = tqdm(dataloader, desc=f"Epoch {epoch}", leave=False)
@@ -103,12 +106,15 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, kl_weight=0.001
         
         # Forward pass
         x_recon, mu, logvar = model(x)
+
+        
         
         # Compute VAE loss
         loss, recon_loss, kl_loss = vae_loss_sinkhorn(
             x_recon, x, mu, logvar, 
             recon_weight=1.0, 
-            kl_weight=kl_weight
+            kl_weight=kl_weight,
+            sinkhorn_epsilon=sinkhorn_eps
         )
         
         # Backward pass with gradient accumulation
@@ -186,7 +192,8 @@ def main():
     for epoch in range(1, CONFIG["train"]["max_epochs"] + 1):
         
         # KL Annealing: gradually increase from 0 to target over first 500 epochs
-        kl_weight = min(0.001, 0.001 * epoch / 500.0)
+        # kl_weight = min(0.001, 0.001 * epoch / 500.0)
+        kl_weight = 0.0
         
         # Train
         avg_loss, avg_recon, avg_kl = train_one_epoch(
