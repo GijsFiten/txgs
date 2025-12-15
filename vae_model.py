@@ -169,9 +169,7 @@ class GaussianVAE(nn.Module):
     
     def forward(self, x):
         mu, logvar = self.encode(x)
-        # z = self.reparameterize(mu, logvar)
-        # OVERFIT
-        z = mu
+        z = self.reparameterize(mu, logvar)
         x_recon = self.decode(z)
         return x_recon, mu, logvar
     

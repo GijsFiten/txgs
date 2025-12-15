@@ -15,8 +15,8 @@ from utils.image_utils import render_and_save
 CONFIG = {
     "data_dir": "./data/chairs_1k/",
     "output_dir": "./output/",
-    "batch_size": 1,
-    "grad_accumulation": 3,
+    "batch_size": 128,
+    "grad_accumulation": 1,
     "model": {
         "num_gaussians": 1000,
         "input_dim": 8,
@@ -86,7 +86,6 @@ def sample_from_latent(model, device, num_samples=5, epoch=None):
 
 
 # --- Core: Training Loop ---
-# --- Core: Training Loop ---
 def train_one_epoch(model, dataloader, optimizer, device, epoch, kl_weight=0.001):
     model.train()
     epoch_loss = 0
@@ -107,8 +106,6 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, kl_weight=0.001
         # Forward pass
         x_recon, mu, logvar = model(x)
 
-        
-        
         # Compute VAE loss
         loss, recon_loss, kl_loss = vae_loss_sinkhorn(
             x_recon, x, mu, logvar, 
@@ -192,8 +189,7 @@ def main():
     for epoch in range(1, CONFIG["train"]["max_epochs"] + 1):
         
         # KL Annealing: gradually increase from 0 to target over first 500 epochs
-        # kl_weight = min(0.001, 0.001 * epoch / 500.0)
-        kl_weight = 0.0
+        kl_weight = min(0.001, 0.001 * epoch / 500.0)
         
         # Train
         avg_loss, avg_recon, avg_kl = train_one_epoch(

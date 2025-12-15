@@ -15,7 +15,7 @@ class GaussianSplatDataset(Dataset):
             device (str): Device for temporary loading ('cpu' recommended for dataloader)
             augment (bool): Whether to apply data augmentation
         """
-        self.file_paths = glob.glob(os.path.join(data_dir, "*.npz"))[:1]
+        self.file_paths = glob.glob(os.path.join(data_dir, "*.npz"))
         self.device = device
         self.augment = augment
         
@@ -177,7 +177,7 @@ def create_dataloaders(data_dir, batch_size=32, num_points=1000):
         shuffle=True,       # Shuffle for training
         num_workers=2,      # Parallel loading
         pin_memory=False,    # Faster transfer to CUDA
-        drop_last=True      # Drop incomplete batch at end
+        drop_last=False      # Drop incomplete batch at end
     )
     
     return dataloader
