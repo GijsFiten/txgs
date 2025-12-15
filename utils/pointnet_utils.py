@@ -289,9 +289,9 @@ class PointNetSetAbstractionMsg(nn.Module):
             grouped_points = grouped_gaussians_norm.permute(0, 3, 2, 1)  # [B, 2+D, K, S]
             
             # Apply convolutions
-            for j in range(len(self.conv_blocks[i])):
-                conv = self.conv_blocks[i][j]
-                bn = self.bn_blocks[i][j]
+            for j in range(len(self.conv_blocks[i])): # pyright: ignore[reportArgumentType]
+                conv = self.conv_blocks[i][j] # pyright: ignore[reportIndexIssue]
+                bn = self.bn_blocks[i][j] # pyright: ignore[reportIndexIssue]
                 grouped_points = F.relu(bn(conv(grouped_points)))
             
             # Max pooling over neighbors

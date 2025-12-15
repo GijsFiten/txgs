@@ -8,7 +8,7 @@ from tqdm import tqdm  # Recommended for progress bars
 
 from utils.dataset_helper import create_dataloaders
 from utils.diffusion_data_helper import DiffusionScheduler, denormalize_data
-from vae_model import GaussianVAE, vae_loss
+from vae_model import GaussianVAE, vae_loss, vae_loss_sinkhorn
 from utils.image_utils import render_and_save
 
 # --- Configuration ---
@@ -106,8 +106,7 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, kl_weight=0.001
         x_recon, mu, logvar = model(x)
         
         # Compute VAE loss
-        from vae_model import vae_loss
-        loss, recon_loss, kl_loss = vae_loss(
+        loss, recon_loss, kl_loss = vae_loss_sinkhorn(
             x_recon, x, mu, logvar, 
             recon_weight=1.0, 
             kl_weight=kl_weight
