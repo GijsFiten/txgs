@@ -218,6 +218,7 @@ __marimo__/
 .conda/
 data/large/*
 data/small/*
+data/chairs_1k/*
 
 gsplat/
 output/

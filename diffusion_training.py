@@ -8,15 +8,15 @@ from tqdm import tqdm  # Recommended for progress bars
 
 from utils.dataset_helper import create_dataloaders
 from utils.diffusion_data_helper import DiffusionScheduler, denormalize_data
-from model import GaussianDiffusionTransformer
+from diffusion_model import GaussianDiffusionTransformer
 from utils.image_utils import render_and_save
 
 # --- Configuration ---
 CONFIG = {
-    "data_dir": "./data/small/",
+    "data_dir": "./data/chairs_1k/",
     "output_dir": "./output/",
-    "batch_size": 128,            # Small physical batch size
-    "grad_accumulation": 4,     # Effective batch size = 192 (48 * 4)
+    "batch_size": 16,      
+    "grad_accumulation": 3, 
     "model": {
         "input_dim": 8,
         "model_dim": 512,
@@ -25,9 +25,9 @@ CONFIG = {
     },
     "train": {
         "max_epochs": 3000,
-        "base_lr": 2e-4,        # Slightly lower max LR for stability
+        "base_lr": 1e-3,        # Slightly lower max LR for stability
         "warmup_epochs": 100,   # Warmup to prevent shock
-        "clip_norm": 3,
+        "clip_norm": 2,
     },
     "diffusion_steps": 1000,
 }
@@ -132,6 +132,7 @@ def train_one_epoch(model, dataloader, optimizer, diffusion_scheduler, device, e
 
         # 1. Safety Checks
         if torch.isnan(batch).any():
+            print(f"Warning: NaN detected in input batch at index {batch_idx}, skipping this batch.")
             continue
 
         # 2. Diffusion Process
@@ -214,11 +215,8 @@ def main():
         
         # Train
         avg_loss = train_one_epoch(model, dataloader, optimizer, diffusion_scheduler, device, epoch)
-        
-        # Step LR Scheduler (once per epoch)
-        lr_scheduler.step()
         current_lr = optimizer.param_groups[0]['lr']
-        
+    
         # Checkpointing
         if avg_loss < best_loss:
             best_loss = avg_loss
@@ -235,8 +233,11 @@ def main():
             "best_loss": best_loss
         })
         print(f"Epoch {epoch}/{CONFIG['train']['max_epochs']} | Loss: {avg_loss:.4f} | LR: {current_lr:.6f}")
-            
 
+         # Step LR Scheduler (once per epoch)
+        lr_scheduler.step()
+        current_lr = optimizer.param_groups[0]['lr']
+            
         # Periodic Sampling
         if epoch % SAMPLE_SAVE_RATE == 0:
             sample_and_render(model, diffusion_scheduler, device, num_samples=3, epoch=epoch)
