@@ -219,6 +219,7 @@ __marimo__/
 data/large/*
 data/small/*
 data/chairs_1k/*
+data/chairs_1k_overfit/*
 
 gsplat/
 output/

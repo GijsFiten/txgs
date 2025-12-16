@@ -13,20 +13,20 @@ from utils.image_utils import render_and_save
 
 # --- Configuration ---
 CONFIG = {
-    "data_dir": "./data/chairs_1k/",
+    "data_dir": "./data/chairs_1k_overfit/",
     "output_dir": "./output/",
     "batch_size": 128,
     "grad_accumulation": 1,
     "model": {
         "num_gaussians": 1000,
         "input_dim": 8,
-        "model_dim": 512,
+        "model_dim": 768,
     },
     "train": {
         "max_epochs": 5000,
-        "base_lr": 1e-4,       
-        "warmup_epochs": 100,
-        "clip_norm": 2,
+        "base_lr": 5e-5,       # Higher LR for faster convergence
+        "warmup_epochs": 0,     # No warmup needed for overfitting
+        "clip_norm": 2.0,       # Less aggressive clipping
     },
 }
 
@@ -84,6 +84,68 @@ def sample_from_latent(model, device, num_samples=5, epoch=None):
     
     model.train()
 
+def visualize_reconstruction(model, dataloader, device, epoch=None):
+    """Reconstruct a batch from the dataloader and render"""
+    model.eval()
+    os.makedirs(CONFIG["output_dir"], exist_ok=True)
+    
+    # Get one batch
+    batch = next(iter(dataloader))
+    batch = batch.to(device)
+    
+    with torch.no_grad():
+        # Forward pass (deterministic)
+        x_recon, _, _ = model(batch, use_sampling=False)
+        
+        print(f"\n[Rendering] Saving reconstruction...")
+        # Save first item in batch
+        sample = x_recon[0]
+        
+        # Denormalize
+        xy, scale, rot, feat = denormalize_data(
+            sample[:, 0:2], sample[:, 2:4], sample[:, 4:5], sample[:, 5:8]
+        )
+        
+        xy = xy.contiguous().float()
+        scale = scale.contiguous().float()
+        rot = rot.contiguous().float()
+        feat = feat.contiguous().float()
+        
+        img_size = (int(480), int(640))
+        epoch_suffix = f"_epoch{epoch}" if epoch is not None else ""
+        filename = f"{CONFIG['output_dir']}/vae_recon{epoch_suffix}"
+        
+        render_and_save(xy, scale, rot, feat, filename, img_size)
+    
+    model.train()
+
+def save_target_visualization(dataloader, device):
+    """Save the target ground truth image"""
+    os.makedirs(CONFIG["output_dir"], exist_ok=True)
+    
+    # Get one batch
+    batch = next(iter(dataloader))
+    batch = batch.to(device)
+    
+    # We want the first item in the batch
+    target = batch[0] # [N, 8]
+    
+    print(f"\n[Rendering] Saving target ground truth...")
+    
+    # Denormalize
+    xy, scale, rot, feat = denormalize_data(
+        target[:, 0:2], target[:, 2:4], target[:, 4:5], target[:, 5:8]
+    )
+    
+    xy = xy.contiguous().float()
+    scale = scale.contiguous().float()
+    rot = rot.contiguous().float()
+    feat = feat.contiguous().float()
+    
+    img_size = (int(480), int(640))
+    filename = f"{CONFIG['output_dir']}/target_ground_truth"
+    
+    render_and_save(xy, scale, rot, feat, filename, img_size)
 
 # --- Core: Training Loop ---
 def train_one_epoch(model, dataloader, optimizer, device, epoch, kl_weight=0.001):
@@ -93,20 +155,29 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, kl_weight=0.001
     epoch_kl_loss = 0
     valid_batches = 0
 
-    # Anneal Epsilon: 0.1 -> 0.0005
-    sinkhorn_eps = max(0.0005, 0.1 * (0.99 ** epoch))
+     # Annealing Strategy
+    eps_start = 0.1
+    eps_end = 5e-5
+    decay_steps = 2500
     
+    if epoch < decay_steps:
+        # Logarithmic decay
+        alpha = epoch / decay_steps
+        sinkhorn_eps = eps_start * (eps_end / eps_start) ** alpha
+    else:
+        sinkhorn_eps = eps_end
+
     # Progress bar for the epoch
-    pbar = tqdm(dataloader, desc=f"Epoch {epoch}", leave=False)
+    pbar = tqdm(dataloader, desc=f"Epoch {epoch} | Eps: {sinkhorn_eps:.5f}", leave=False)
     
     for batch_idx, batch in enumerate(pbar):
         # Move data to device
         x = batch.to(device)  # [B, N, 8]
         
-        # Forward pass
-        x_recon, mu, logvar = model(x)
+        # Forward pass - DETERMINISTIC for overfitting
+        x_recon, mu, logvar = model(x, use_sampling=True)
 
-        # Compute VAE loss
+        # Compute VAE loss using Sinkhorn with annealing
         loss, recon_loss, kl_loss = vae_loss_sinkhorn(
             x_recon, x, mu, logvar, 
             recon_weight=1.0, 
@@ -159,7 +230,10 @@ def main():
     print(f"Starting training on {device}...")
 
     # 1. Data
-    dataloader = create_dataloaders(CONFIG["data_dir"], batch_size=CONFIG["batch_size"])
+    dataloader = create_dataloaders(CONFIG["data_dir"], batch_size=CONFIG["batch_size"], shuffle=False, augment=False)  # No shuffle or augmentation for overfitting
+
+    # Save target visualization
+    save_target_visualization(dataloader, device)
 
     # 2. Model
     model = GaussianVAE(
@@ -172,7 +246,7 @@ def main():
     print(f"Model initialized: {total_params / 1e6:.2f}M Params")
 
     # 3. Optimization Components
-    optimizer = optim.AdamW(model.parameters(), lr=CONFIG["train"]["base_lr"], weight_decay=1e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=CONFIG["train"]["base_lr"], weight_decay=0.0)  # No weight decay for overfitting
     
     # Custom Warmup Scheduler
     lr_scheduler = get_warmup_cosine_scheduler(
@@ -224,7 +298,8 @@ def main():
             
         # Periodic Sampling (sample from latent space)
         if epoch % SAMPLE_SAVE_RATE == 0:
-            sample_from_latent(model, device, num_samples=5, epoch=epoch)
+            # sample_from_latent(model, device, num_samples=5, epoch=epoch)
+            visualize_reconstruction(model, dataloader, device, epoch=epoch)
             
         # Periodic Save
         if epoch % 500 == 0:
