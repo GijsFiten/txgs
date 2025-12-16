@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from utils.pointnet_utils import PointNetSetAbstraction, PointNetSetAbstractionMsg, PointNetFeaturePropagation
 from scipy.optimize import linear_sum_assignment
-from chamferdist import ChamferDistance
 
 
 # This is a VAE model which takes in 2D Gaussian splats and encodes them into a latent space
@@ -118,13 +117,13 @@ class GaussianVAE(nn.Module):
             radius=None,
             nsample=None,
             in_channel=640 + 2,
-            mlp=[256, 512, 768],
+            mlp=[256, 512, 1024],
             group_all=True
         )
         
         # Latent space projections
-        self.fc_mu = nn.Linear(768, latent_dim)
-        self.fc_logvar = nn.Linear(768, latent_dim)
+        self.fc_mu = nn.Linear(1024, latent_dim)
+        self.fc_logvar = nn.Linear(1024, latent_dim)
         
         # --- Decoder (Transformer) ---
         self.decoder = GaussianTransformerDecoder(

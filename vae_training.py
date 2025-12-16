@@ -15,12 +15,12 @@ from utils.image_utils import render_and_save
 CONFIG = {
     "data_dir": "./data/chairs_1k/",
     "output_dir": "./output/",
-    "batch_size": 128,
-    "grad_accumulation": 1,
+    "batch_size": 64,
+    "grad_accumulation": 4,
     "model": {
         "num_gaussians": 1000,
         "input_dim": 8,
-        "model_dim": 768,
+        "model_dim": 1024,
     },
     "train": {
         "max_epochs": 10000,
