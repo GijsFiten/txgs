@@ -23,14 +23,15 @@ CONFIG = {
         "model_dim": 768,
     },
     "train": {
-        "max_epochs": 5000,
-        "base_lr": 5e-5,       # Higher LR for faster convergence
-        "warmup_epochs": 0,     # No warmup needed for overfitting
-        "clip_norm": 2.0,       # Less aggressive clipping
+        "max_epochs": 10000,
+        "base_lr": 5e-5,       
+        "warmup_epochs": 150,    
+        "clip_norm": 2.0,      
     },
 }
 
-SAMPLE_SAVE_RATE = 100
+SAMPLE_SAVE_RATE = 500
+RECONSTRUCT_SAVE_RATE = 100
 
 # --- Utils: Learning Rate Schedule ---
 def get_warmup_cosine_scheduler(optimizer, warmup_epochs, max_epochs):
@@ -246,7 +247,7 @@ def main():
     print(f"Model initialized: {total_params / 1e6:.2f}M Params")
 
     # 3. Optimization Components
-    optimizer = optim.AdamW(model.parameters(), lr=CONFIG["train"]["base_lr"], weight_decay=0.0)  # No weight decay for overfitting
+    optimizer = optim.AdamW(model.parameters(), lr=CONFIG["train"]["base_lr"], weight_decay=1e-4)  # No weight decay for overfitting
     
     # Custom Warmup Scheduler
     lr_scheduler = get_warmup_cosine_scheduler(
@@ -298,7 +299,9 @@ def main():
             
         # Periodic Sampling (sample from latent space)
         if epoch % SAMPLE_SAVE_RATE == 0:
-            # sample_from_latent(model, device, num_samples=5, epoch=epoch)
+            sample_from_latent(model, device, num_samples=5, epoch=epoch)
+        
+        if epoch % RECONSTRUCT_SAVE_RATE == 0:
             visualize_reconstruction(model, dataloader, device, epoch=epoch)
             
         # Periodic Save
