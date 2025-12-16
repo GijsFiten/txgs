@@ -13,7 +13,7 @@ from utils.image_utils import render_and_save
 
 # --- Configuration ---
 CONFIG = {
-    "data_dir": "./data/chairs_1k_overfit/",
+    "data_dir": "./data/chairs_1k/",
     "output_dir": "./output/",
     "batch_size": 128,
     "grad_accumulation": 1,
