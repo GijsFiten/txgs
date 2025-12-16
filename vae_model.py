@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils.pointnet_utils import PointNetSetAbstraction, PointNetSetAbstractionMsg
+from utils.pointnet_utils import PointNetSetAbstraction, PointNetSetAbstractionMsg, PointNetFeaturePropagation
 from scipy.optimize import linear_sum_assignment
+from chamferdist import ChamferDistance
 
 
 # This is a VAE model which takes in 2D Gaussian splats and encodes them into a latent space
@@ -17,7 +18,7 @@ from scipy.optimize import linear_sum_assignment
 # latent space smooth and continuous
 
 class GaussianTransformerDecoder(nn.Module):
-    def __init__(self, num_gaussians, latent_dim, output_dim=8, d_model=128, nhead=4, num_layers=3):
+    def __init__(self, num_gaussians, latent_dim, output_dim=8, d_model=256, nhead=8, num_layers=4):
         super().__init__()
         self.num_gaussians = num_gaussians
         
@@ -44,8 +45,11 @@ class GaussianTransformerDecoder(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
-        # 4. Final Head
-        self.output_head = nn.Linear(d_model, output_dim)
+        # 4. Final Heads (Split for specific activations)
+        self.head_xy = nn.Linear(d_model, 2)
+        self.head_scale = nn.Linear(d_model, 2)
+        self.head_rot = nn.Linear(d_model, 1)
+        self.head_color = nn.Linear(d_model, 3)
 
     def forward(self, z):
         """
@@ -70,13 +74,22 @@ class GaussianTransformerDecoder(nn.Module):
         # D. Run Transformer
         x = self.transformer(x)
         
-        # E. Project to features
-        x = self.output_head(x)
+        # E. Project to features with specific activations
+        # We use Linear layers for all outputs because the VAE predicts 
+        # NORMALIZED values (as defined in diffusion_data_helper.py).
+        # - Scale is log-normalized (can be negative) -> Linear is correct.
+        # - Color is normalized to [-1, 1] -> Linear is correct (Tanh is also an option but Linear is safer).
+        xy = self.head_xy(x)
+        scale = self.head_scale(x)
+        rot = self.head_rot(x)
+        color = self.head_color(x)
+        
+        x = torch.cat([xy, scale, rot, color], dim=-1)
         
         return x
 
 class GaussianVAE(nn.Module):
-    def __init__(self, num_gaussians=1000, input_dim=8, latent_dim=512):
+    def __init__(self, num_gaussians=1000, input_dim=8, latent_dim=768):
         super(GaussianVAE, self).__init__()
         self.num_gaussians = num_gaussians
         self.input_dim = input_dim
@@ -89,38 +102,38 @@ class GaussianVAE(nn.Module):
             radius_list=[0.1, 0.2, 0.4], 
             nsample_list=[8, 16, 32],
             in_channel=6,
-            mlp_list=[[16, 16, 32], [32, 32, 64], [32, 48, 64]]
+            mlp_list=[[32, 32, 64], [64, 64, 128], [64, 96, 128]]
         )
         
         self.sa2 = PointNetSetAbstractionMsg(
             npoint=64,
             radius_list=[0.2, 0.4, 0.8],
             nsample_list=[16, 32, 64],
-            in_channel=160,
-            mlp_list=[[32, 32, 64], [64, 64, 128], [64, 64, 128]]
+            in_channel=320,
+            mlp_list=[[64, 64, 128], [128, 128, 256], [128, 128, 256]]
         )
         
         self.sa3 = PointNetSetAbstraction(
             npoint=None,
             radius=None,
             nsample=None,
-            in_channel=320 + 2,
-            mlp=[128, 256, 512],
+            in_channel=640 + 2,
+            mlp=[256, 512, 768],
             group_all=True
         )
         
         # Latent space projections
-        self.fc_mu = nn.Linear(512, latent_dim)
-        self.fc_logvar = nn.Linear(512, latent_dim)
+        self.fc_mu = nn.Linear(768, latent_dim)
+        self.fc_logvar = nn.Linear(768, latent_dim)
         
         # --- Decoder (Transformer) ---
         self.decoder = GaussianTransformerDecoder(
             num_gaussians=num_gaussians,
             latent_dim=latent_dim,
             output_dim=input_dim, # 8
-            d_model=128,          # Keep small
-            nhead=4,              # 4 heads is sufficient for 128 dim
-            num_layers=3          # 3 layers
+            d_model=256,          # Increased capacity
+            nhead=8,              # 8 heads for 256 dim
+            num_layers=4          # 4 layers for deeper processing
         )
         
     def encode(self, x):
@@ -148,28 +161,23 @@ class GaussianVAE(nn.Module):
         # Run Transformer Decoder
         x_recon = self.decoder(z) # [B, N, 8]
         
-        # --- Post-Processing / Clamping ---
+        # Minimal post-processing - let the model learn the right scale
+        # Only clamp XY to prevent extreme outliers
+        xy = torch.clamp(x_recon[:, :, 0:2], -5.0, 5.0)
         
-        # 1. XY: Tanh to keep in valid range (-1 to 1) roughly, or just clamp
-        # Assuming normalized data is roughly -1 to 1.
-        # We clamp to slightly larger to avoid boundary issues.
-        xy = torch.clamp(x_recon[:, :, 0:2], -3.5, 3.5)
-        
-        # 2. Scale: Usually log-scale or small positive values.
+        # Everything else passes through
         scale = x_recon[:, :, 2:4] 
-        
-        # 3. Rotation: Keep as is (raw radians)
         rot = x_recon[:, :, 4:5]
-        
-        # 4. Color (RGB): Sigmoid if 0-1, or Clamp if standardized
-        # Assuming standardized input, so just clamp
         feat = x_recon[:, :, 5:8]
         
         return torch.cat([xy, scale, rot, feat], dim=-1)
     
-    def forward(self, x):
+    def forward(self, x, use_sampling=True):
         mu, logvar = self.encode(x)
-        z = self.reparameterize(mu, logvar)
+        if use_sampling:
+            z = self.reparameterize(mu, logvar)
+        else:
+            z = mu  # Deterministic for overfitting
         x_recon = self.decode(z)
         return x_recon, mu, logvar
     
@@ -220,52 +228,43 @@ def vae_loss(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001):
     
     return total_loss, recon_loss, kl_loss
 
-def vae_loss_sinkhorn(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001, sinkhorn_epsilon=0.001):
+def vae_loss_sinkhorn(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001, sinkhorn_epsilon=0.01):
     B, N, C = x.shape
     
-    # 1. Compute Cost Matrix based on XY ONLY (Indices 0 and 1)
-    # x_recon: [B, N, 8], x: [B, N, 8]
+    # 1. Compute Cost Matrix on ALL features (weighted)
+    # Weight different features appropriately
+    # XY: high weight (spatial is important)
+    # Scale, Rotation: medium weight  
+    # Color: lower weight
+    
     pred_xy = x_recon[:, :, :2]
     gt_xy = x[:, :, :2]
+    pred_scale = x_recon[:, :, 2:4]
+    gt_scale = x[:, :, 2:4]
+    pred_rot = x_recon[:, :, 4:5]
+    gt_rot = x[:, :, 4:5]
+    pred_color = x_recon[:, :, 5:8]
+    gt_color = x[:, :, 5:8]
     
-    # Squared Euclidean Distance for XY
-    # [B, N, 1, 2] - [B, 1, N, 2] -> [B, N, N]
-    dist_xy = torch.sum((pred_xy.unsqueeze(2) - gt_xy.unsqueeze(1)) ** 2, dim=-1)
+    # Compute per-feature costs [B, N, N]
+    cost_xy = torch.sum((pred_xy.unsqueeze(2) - gt_xy.unsqueeze(1)) ** 2, dim=-1)
+    cost_scale = torch.sum((pred_scale.unsqueeze(2) - gt_scale.unsqueeze(1)) ** 2, dim=-1)
+    cost_color = torch.sum((pred_color.unsqueeze(2) - gt_color.unsqueeze(1)) ** 2, dim=-1)
+    
+    # Rotation: use angular distance (handles periodicity)
+    rot_diff = pred_rot.unsqueeze(2) - gt_rot.unsqueeze(1)  # [B, N, N, 1]
+    cost_rot = (1 - torch.cos(rot_diff)).squeeze(-1)  # [B, N, N]
+    
+    # Weighted total cost
+    cost_matrix = 10.0 * cost_xy + 1.0 * cost_scale + 0.5 * cost_rot + 0.5 * cost_color
     
     # 2. Compute Soft Permutation Matrix (P) using Sinkhorn
-    # epsilon controls "hardness": 0.01 is sharper, 0.1 is softer/more stable
-    P = sinkhorn_matching(dist_xy, epsilon=sinkhorn_epsilon, max_iter=50) # [B, N, N]
+    P = sinkhorn_matching(cost_matrix, epsilon=sinkhorn_epsilon, max_iter=50) # [B, N, N]
     
-    # 3. Permute Ground Truth to match Prediction
-    # We want x_matched[b, i] to be the point in x[b] that matches x_recon[b, i]
-    # Matched GT = P * GT (Batch matrix multiplication)
-    x_matched = torch.matmul(P, x) 
-    
-    # 4. Compute Loss on ALL features
-    # Note: Since P is soft, x_matched is a weighted average of GT points.
-    # As epsilon -> 0, it approaches a hard permutation.
-    
-    # Standard MSE for non-periodic features (XY, Scale, RGB)
-    # Assuming indices: 0-2 (XY), 2-4 (Scale), 4-5 (Rot), 5-8 (RGB)
-    
-    # Loss for XY, Scale, RGB
-    non_rot_mask = torch.ones(C, device=x.device, dtype=torch.bool)
-    non_rot_mask[4] = False # Exclude rotation index
-    
-    loss_non_rot = F.mse_loss(x_recon[:, :, non_rot_mask], x_matched[:, :, non_rot_mask])
-    
-    # 5. Special Handling for Periodic Rotation (Index 4)
-    # Since you want to keep 1D rotation, use Cosine distance for loss
-    # to avoid 0 vs 2pi errors.
-    rot_recon = x_recon[:, :, 4]
-    rot_gt = x_matched[:, :, 4]
-    
-    # Loss = 1 - cos(pred - target)
-    # This handles the modularity perfectly while keeping your 1D representation
-    loss_rot = torch.mean(1 - torch.cos(rot_recon - rot_gt))
-    
-    # Total Reconstruction Loss
-    recon_loss = loss_non_rot + 0.1 * loss_rot # Weight rotation as needed
+    # 3. Compute Transport Cost (Sinkhorn Loss)
+    # Sum over N, N, average over B
+    recon_loss = torch.sum(P * cost_matrix) / B
+
     
     # KL Divergence
     kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / B
