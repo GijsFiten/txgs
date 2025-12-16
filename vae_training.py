@@ -230,7 +230,7 @@ def main():
     print(f"Starting training on {device}...")
 
     # 1. Data
-    dataloader = create_dataloaders(CONFIG["data_dir"], batch_size=CONFIG["batch_size"], shuffle=False, augment=False)  # No shuffle or augmentation for overfitting
+    dataloader = create_dataloaders(CONFIG["data_dir"], batch_size=CONFIG["batch_size"], shuffle=False, augment=True)  # No shuffle or augmentation for overfitting
 
     # Save target visualization
     save_target_visualization(dataloader, device)

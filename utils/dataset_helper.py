@@ -176,7 +176,7 @@ def create_dataloaders(data_dir, batch_size=32, num_points=1000, shuffle=True, a
         dataset, 
         batch_size=batch_size,
         shuffle=shuffle,    # Can disable for overfitting
-        num_workers=2,      # Parallel loading
+        num_workers=4,      # Parallel loading
         pin_memory=False,   # Faster transfer to CUDA
         drop_last=False     # Drop incomplete batch at end
     )
