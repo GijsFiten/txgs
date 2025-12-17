@@ -15,7 +15,7 @@ from utils.image_utils import render_and_save
 CONFIG = {
     "data_dir": "./data/chairs_1k/",
     "output_dir": "./output/",
-    "batch_size": 64,
+    "batch_size": 112,
     "grad_accumulation": 4,
     "model": {
         "num_gaussians": 1000,
@@ -264,7 +264,7 @@ def main():
     for epoch in range(1, CONFIG["train"]["max_epochs"] + 1):
         
         # KL Annealing: gradually increase from 0 to target over first 500 epochs
-        kl_weight = min(0.001, 0.001 * epoch / 500.0)
+        kl_weight = min(0.01, 0.01 * epoch / 1000.0)
         
         # Train
         avg_loss, avg_recon, avg_kl = train_one_epoch(
