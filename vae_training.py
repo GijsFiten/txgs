@@ -12,26 +12,28 @@ from vae_model import GaussianVAE, vae_loss, vae_loss_sinkhorn
 from utils.image_utils import render_and_save
 
 # --- Configuration ---
+OVERFIT = True  # Set to True to overfit on a small dataset
 CONFIG = {
-    "data_dir": "./data/chairs_1k/",
+    "data_dir": "./data/chairs_1k/" if not OVERFIT else "./data/overfit/",
     "output_dir": "./output/",
-    "batch_size": 112,
-    "grad_accumulation": 4,
+    "batch_size": 128 if not OVERFIT else 1,
+    "grad_accumulation": 4 if not OVERFIT else 1,
     "model": {
         "num_gaussians": 1000,
         "input_dim": 8,
-        "model_dim": 1024,
+        "model_dim": 512,
     },
     "train": {
-        "max_epochs": 10000,
-        "base_lr": 5e-5,       
-        "warmup_epochs": 150,    
-        "clip_norm": 2.0,      
+        "max_epochs": 10000 if not OVERFIT else 2000,
+        "base_lr": 5e-5 if not OVERFIT else 25e-5,       
+        "warmup_epochs": 150 if not OVERFIT else 30,
+        "sinkhorn_warmup_epochs": 200 if not OVERFIT else 50,
+        "clip_norm": 2.5,      
     },
 }
 
-SAMPLE_SAVE_RATE = 500
-RECONSTRUCT_SAVE_RATE = 100
+SAMPLE_SAVE_RATE = 500 if not OVERFIT else 1000000
+RECONSTRUCT_SAVE_RATE = 100 if not OVERFIT else 25
 
 # --- Utils: Learning Rate Schedule ---
 def get_warmup_cosine_scheduler(optimizer, warmup_epochs, max_epochs):
@@ -149,25 +151,13 @@ def save_target_visualization(dataloader, device):
     render_and_save(xy, scale, rot, feat, filename, img_size)
 
 # --- Core: Training Loop ---
-def train_one_epoch(model, dataloader, optimizer, device, epoch, kl_weight=0.001):
+def train_one_epoch(model, dataloader, optimizer, device, epoch, kl_weight=0.001, sinkhorn_eps=0.1):
     model.train()
     epoch_loss = 0
     epoch_recon_loss = 0
     epoch_kl_loss = 0
     valid_batches = 0
-
-     # Annealing Strategy
-    eps_start = 0.1
-    eps_end = 5e-5
-    decay_steps = 2500
     
-    if epoch < decay_steps:
-        # Logarithmic decay
-        alpha = epoch / decay_steps
-        sinkhorn_eps = eps_start * (eps_end / eps_start) ** alpha
-    else:
-        sinkhorn_eps = eps_end
-
     # Progress bar for the epoch
     pbar = tqdm(dataloader, desc=f"Epoch {epoch} | Eps: {sinkhorn_eps:.5f}", leave=False)
     
@@ -176,7 +166,7 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, kl_weight=0.001
         x = batch.to(device)  # [B, N, 8]
         
         # Forward pass - DETERMINISTIC for overfitting
-        x_recon, mu, logvar = model(x, use_sampling=True)
+        x_recon, mu, logvar = model(x, use_sampling=True if not OVERFIT else False)
 
         # Compute VAE loss using Sinkhorn with annealing
         loss, recon_loss, kl_loss = vae_loss_sinkhorn(
@@ -209,7 +199,8 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, kl_weight=0.001
         pbar.set_postfix({
             'loss': f'{loss.item() * CONFIG["grad_accumulation"]:.4f}',
             'recon': f'{recon_loss.item():.4f}',
-            'kl': f'{kl_loss.item():.6f}'
+            'kl': f'{kl_loss.item():.6f}',
+            'eps': f'{sinkhorn_eps:.5f}'
         })
     
     # Final gradient step if there are remaining accumulated gradients
@@ -231,7 +222,7 @@ def main():
     print(f"Starting training on {device}...")
 
     # 1. Data
-    dataloader = create_dataloaders(CONFIG["data_dir"], batch_size=CONFIG["batch_size"], shuffle=False, augment=True)  # No shuffle or augmentation for overfitting
+    dataloader = create_dataloaders(CONFIG["data_dir"], batch_size=CONFIG["batch_size"], shuffle=True if not OVERFIT else False, augment=True if not OVERFIT else False)  # No shuffle or augmentation for overfitting
 
     # Save target visualization
     save_target_visualization(dataloader, device)
@@ -247,7 +238,7 @@ def main():
     print(f"Model initialized: {total_params / 1e6:.2f}M Params")
 
     # 3. Optimization Components
-    optimizer = optim.AdamW(model.parameters(), lr=CONFIG["train"]["base_lr"], weight_decay=1e-4)  # No weight decay for overfitting
+    optimizer = optim.AdamW(model.parameters(), lr=CONFIG["train"]["base_lr"], weight_decay=1e-4 if not OVERFIT else 0.0)  # No weight decay for overfitting
     
     # Custom Warmup Scheduler
     lr_scheduler = get_warmup_cosine_scheduler(
@@ -264,11 +255,11 @@ def main():
     for epoch in range(1, CONFIG["train"]["max_epochs"] + 1):
         
         # KL Annealing: gradually increase from 0 to target over first 500 epochs
-        kl_weight = min(0.01, 0.01 * epoch / 1000.0)
-        
-        # Train
+        kl_weight = min(0.01, 0.01 * epoch / 1000.0) if not OVERFIT else 0.0
+        sinkhorn_eps = max(0.001, 0.5 * (0.995 ** epoch)) 
+              
         avg_loss, avg_recon, avg_kl = train_one_epoch(
-            model, dataloader, optimizer, device, epoch, kl_weight=kl_weight
+            model, dataloader, optimizer, device, epoch, kl_weight=kl_weight, sinkhorn_eps=sinkhorn_eps
         )
         current_lr = optimizer.param_groups[0]['lr']
     
@@ -287,6 +278,7 @@ def main():
             "recon_loss": avg_recon,
             "kl_loss": avg_kl,
             "kl_weight": kl_weight,
+            "sinkhorn_eps": sinkhorn_eps,
             "learning_rate": current_lr,
             "best_loss": best_loss
         })

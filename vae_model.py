@@ -17,38 +17,35 @@ from scipy.optimize import linear_sum_assignment
 # latent space smooth and continuous
 
 class GaussianTransformerDecoder(nn.Module):
-    def __init__(self, num_gaussians, latent_dim, output_dim=8, d_model=256, nhead=8, num_layers=4):
+    def __init__(self, num_gaussians, latent_dim, output_dim=8, nhead=8, num_layers=4):
         super().__init__()
         self.num_gaussians = num_gaussians
+        self.d_model = latent_dim  # Directly use latent dimension
         
         # 1. Learnable "Query" Embeddings
-        # These act as the initial "slots" for the gaussians before they know what shape they are forming.
+        # These are the "empty slots" that will become your Gaussians.
         # Shape: [1, N, d_model]
-        self.query_embeddings = nn.Parameter(torch.randn(1, num_gaussians, d_model))
+        self.query_embeddings = nn.Parameter(torch.randn(1, num_gaussians, self.d_model))
         
-        # 2. Latent Projection
-        # Projects your VAE latent (512) down to the transformer dim (128)
-        self.latent_proj = nn.Linear(latent_dim, d_model)
-        
-        # 3. Transformer (Decoder-only style)
-        # We use batch_first=True for easier handling
-        # norm_first=True (Pre-LN) is crucial for training stability in generative transformers
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, 
+        # 2. Standard Transformer Decoder
+        # This architecture inherently supports Cross-Attention.
+        # Queries (tgt) attend to Latent (memory).
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=self.d_model, 
             nhead=nhead, 
-            dim_feedforward=d_model * 4, 
+            dim_feedforward=self.d_model * 4, 
             dropout=0.1, 
             activation="gelu",
             batch_first=True,
-            norm_first=True
+            norm_first=True  # Pre-LN is crucial for convergence
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
         
-        # 4. Final Heads (Split for specific activations)
-        self.head_xy = nn.Linear(d_model, 2)
-        self.head_scale = nn.Linear(d_model, 2)
-        self.head_rot = nn.Linear(d_model, 1)
-        self.head_color = nn.Linear(d_model, 3)
+        # 3. Output Heads
+        self.head_xy = nn.Linear(self.d_model, 2)
+        self.head_scale = nn.Linear(self.d_model, 2)
+        self.head_rot = nn.Linear(self.d_model, 1)
+        self.head_color = nn.Linear(self.d_model, 3)
 
     def forward(self, z):
         """
@@ -59,33 +56,28 @@ class GaussianTransformerDecoder(nn.Module):
         """
         B = z.shape[0]
         
-        # A. Prepare Queries: [1, N, D] -> [B, N, D]
-        queries = self.query_embeddings.expand(B, -1, -1)
+        # A. Prepare Queries (Target)
+        # These represent "Gaussian ID 0" to "Gaussian ID N"
+        tgt = self.query_embeddings.expand(B, -1, -1) # [B, N, d_model]
         
-        # B. Prepare Latent Condition: [B, latent_dim] -> [B, 1, D]
-        z_emb = self.latent_proj(z).unsqueeze(1)
+        # B. Prepare Memory (Latent)
+        # We treat the single latent vector as a sequence of length 1.
+        # The decoder will Cross-Attend to this.
+        memory = z.unsqueeze(1) # [B, 1, d_model]
         
-        # C. Condition the queries
-        # We add the latent info to every query slot. This tells the slots *what* object to form.
-        # The learnable query_embeddings tell the slots *which part* of the object they are responsible for.
-        x = queries + z_emb
+        # C. Run Transformer Decoder
+        # The magic happens here: 
+        # 1. Self-Attention: Queries arrange themselves spatially.
+        # 2. Cross-Attention: Queries look at 'memory' (z) to get shape info.
+        x = self.decoder(tgt, memory)
         
-        # D. Run Transformer
-        x = self.transformer(x)
-        
-        # E. Project to features with specific activations
-        # We use Linear layers for all outputs because the VAE predicts 
-        # NORMALIZED values (as defined in diffusion_data_helper.py).
-        # - Scale is log-normalized (can be negative) -> Linear is correct.
-        # - Color is normalized to [-1, 1] -> Linear is correct (Tanh is also an option but Linear is safer).
+        # D. Project to features
         xy = self.head_xy(x)
         scale = self.head_scale(x)
         rot = self.head_rot(x)
         color = self.head_color(x)
         
-        x = torch.cat([xy, scale, rot, color], dim=-1)
-        
-        return x
+        return torch.cat([xy, scale, rot, color], dim=-1)
 
 class GaussianVAE(nn.Module):
     def __init__(self, num_gaussians=1000, input_dim=8, latent_dim=768):
@@ -95,44 +87,31 @@ class GaussianVAE(nn.Module):
         self.latent_dim = latent_dim
         
         # --- Encoder (PointNet++) ---
-        # Same as before
+        # (Your encoder code remains exactly the same)
         self.sa1 = PointNetSetAbstractionMsg(
-            npoint=256,
-            radius_list=[0.1, 0.2, 0.4], 
-            nsample_list=[8, 16, 32],
-            in_channel=6,
-            mlp_list=[[32, 32, 64], [64, 64, 128], [64, 96, 128]]
+            npoint=256, radius_list=[0.1, 0.2, 0.4], nsample_list=[8, 16, 32],
+            in_channel=6, mlp_list=[[32, 32, 64], [64, 64, 128], [64, 96, 128]]
         )
-        
         self.sa2 = PointNetSetAbstractionMsg(
-            npoint=64,
-            radius_list=[0.2, 0.4, 0.8],
-            nsample_list=[16, 32, 64],
-            in_channel=320,
-            mlp_list=[[64, 64, 128], [128, 128, 256], [128, 128, 256]]
+            npoint=64, radius_list=[0.2, 0.4, 0.8], nsample_list=[16, 32, 64],
+            in_channel=320, mlp_list=[[64, 64, 128], [128, 128, 256], [128, 128, 256]]
         )
-        
         self.sa3 = PointNetSetAbstraction(
-            npoint=None,
-            radius=None,
-            nsample=None,
-            in_channel=640 + 2,
-            mlp=[256, 512, 1024],
-            group_all=True
+            npoint=None, radius=None, nsample=None, in_channel=640 + 2,
+            mlp=[256, 512, 1024], group_all=True
         )
         
-        # Latent space projections
+        # Projection to latent_dim (768)
         self.fc_mu = nn.Linear(1024, latent_dim)
         self.fc_logvar = nn.Linear(1024, latent_dim)
         
-        # --- Decoder (Transformer) ---
+        # --- Decoder (Updated) ---
         self.decoder = GaussianTransformerDecoder(
             num_gaussians=num_gaussians,
-            latent_dim=latent_dim,
-            output_dim=input_dim, # 8
-            d_model=256,          # Increased capacity
-            nhead=8,              # 8 heads for 256 dim
-            num_layers=4          # 4 layers for deeper processing
+            latent_dim=latent_dim, # Passes 768 directly
+            output_dim=input_dim,
+            nhead=8,     # 768 is divisible by 8 (96 dim per head)
+            num_layers=4 
         )
         
     def encode(self, x):
@@ -155,28 +134,26 @@ class GaussianVAE(nn.Module):
         return mu + eps * std
     
     def decode(self, z):
-        B = z.shape[0]
+        # Run Decoder
+        x_recon = self.decoder(z) 
         
-        # Run Transformer Decoder
-        x_recon = self.decoder(z) # [B, N, 8]
-        
-        # Minimal post-processing - let the model learn the right scale
-        # Only clamp XY to prevent extreme outliers
+        # Clamps to prevent Inf/NaNs in rasterizer
         xy = torch.clamp(x_recon[:, :, 0:2], -5.0, 5.0)
         
-        # Everything else passes through
-        scale = x_recon[:, :, 2:4] 
+        # Hard clamp scale before exp to prevent overflow
+        scale_norm = torch.clamp(x_recon[:, :, 2:4], max=5.0)
+        
         rot = x_recon[:, :, 4:5]
         feat = x_recon[:, :, 5:8]
         
-        return torch.cat([xy, scale, rot, feat], dim=-1)
+        return torch.cat([xy, scale_norm, rot, feat], dim=-1)
     
     def forward(self, x, use_sampling=True):
         mu, logvar = self.encode(x)
         if use_sampling:
             z = self.reparameterize(mu, logvar)
         else:
-            z = mu  # Deterministic for overfitting
+            z = mu 
         x_recon = self.decode(z)
         return x_recon, mu, logvar
     
