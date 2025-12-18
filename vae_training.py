@@ -12,7 +12,7 @@ from vae_model import GaussianVAE, vae_loss, vae_loss_sinkhorn
 from utils.image_utils import render_and_save
 
 # --- Configuration ---
-OVERFIT = True  # Set to True to overfit on a small dataset
+OVERFIT = False  # Set to True to overfit on a small dataset
 CONFIG = {
     "data_dir": "./data/chairs_1k/" if not OVERFIT else "./data/overfit/",
     "output_dir": "./output/",
