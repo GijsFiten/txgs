@@ -16,7 +16,7 @@ OVERFIT = False  # Set to True to overfit on a small dataset
 CONFIG = {
     "data_dir": "./data/chairs_1k/" if not OVERFIT else "./data/overfit/",
     "output_dir": "./output/",
-    "batch_size": 128 if not OVERFIT else 1,
+    "batch_size": 96 if not OVERFIT else 1,
     "grad_accumulation": 4 if not OVERFIT else 1,
     "model": {
         "num_gaussians": 1000,
@@ -222,7 +222,7 @@ def main():
     print(f"Starting training on {device}...")
 
     # 1. Data
-    dataloader = create_dataloaders(CONFIG["data_dir"], batch_size=CONFIG["batch_size"], shuffle=True if not OVERFIT else False, augment=True if not OVERFIT else False)  # No shuffle or augmentation for overfitting
+    dataloader = create_dataloaders(CONFIG["data_dir"], batch_size=CONFIG["batch_size"], shuffle=True if not OVERFIT else False, augment=False)  # No shuffle or augmentation for overfitting
 
     # Save target visualization
     save_target_visualization(dataloader, device)

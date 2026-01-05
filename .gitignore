@@ -227,3 +227,4 @@ wandb/
 
 *.pth
 slurm*
+*.tar
