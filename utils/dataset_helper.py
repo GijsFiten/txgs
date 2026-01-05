@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 import numpy as np
 import glob
 import os
@@ -162,7 +163,7 @@ class GaussianSplatDataset(Dataset):
         
         return xy, scale, rot, feat
 
-def create_dataloaders(data_dir, batch_size=32, num_points=1000, shuffle=True, augment=False):
+def create_dataloaders(data_dir, batch_size=32, num_points=1000, shuffle=True, augment=False, is_distributed=False):
     
     # Create Dataset
     dataset = GaussianSplatDataset(
@@ -170,15 +171,24 @@ def create_dataloaders(data_dir, batch_size=32, num_points=1000, shuffle=True, a
         augment=augment
     )
 
+    sampler = None
+    if is_distributed:
+        # 1. Create the DistributedSampler
+        # It handles shuffling automatically if shuffle=True
+        sampler = DistributedSampler(dataset, shuffle=shuffle)
+
     # Create DataLoader
-    # num_workers=4 is usually a sweet spot for modern CPUs
     dataloader = DataLoader(
         dataset, 
         batch_size=batch_size,
-        shuffle=shuffle,    # Can disable for overfitting
-        num_workers=4,      # Parallel loading
-        pin_memory=False,   # Faster transfer to CUDA
-        drop_last=False     # Drop incomplete batch at end
+        # 2. If distributed, we MUST turn off loader-level shuffling
+        # because the sampler handles it.
+        shuffle=(shuffle and not is_distributed), 
+        sampler=sampler, 
+        num_workers=4,
+        pin_memory=True, # Recommended True for CUDA
+        drop_last=False
     )
     
-    return dataloader
+    # 3. Return the sampler too! You need it for set_epoch() in the training loop.
+    return dataloader, sampler

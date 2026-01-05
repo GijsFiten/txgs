@@ -1,20 +1,23 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
 import wandb
 import math
 import os
 from tqdm import tqdm  # Recommended for progress bars
 
 from utils.dataset_helper import create_dataloaders
-from utils.diffusion_data_helper import DiffusionScheduler, denormalize_data
-from vae_model import GaussianVAE, vae_loss, vae_loss_sinkhorn
+from utils.diffusion_data_helper import denormalize_data
+from vae_model import GaussianVAE, vae_loss_sinkhorn
 from utils.image_utils import render_and_save
 
 # --- Configuration ---
 OVERFIT = False  # Set to True to overfit on a small dataset
 CONFIG = {
-    "data_dir": "./data/chairs_1k/" if not OVERFIT else "./data/overfit/",
+    "data_dir": "./data/FFHQ/" if not OVERFIT else "./data/overfit/",
     "output_dir": "./output/",
     "batch_size": 96 if not OVERFIT else 1,
     "grad_accumulation": 4 if not OVERFIT else 1,
@@ -218,14 +221,33 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, kl_weight=0.001
 
 
 def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Starting training on {device}...")
+    is_distributed = "LOCAL_RANK" in os.environ
+
+    if is_distributed:
+        local_rank = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend="nccl")
+        device = torch.device(f"cuda:{local_rank}")
+        is_main_process = (dist.get_rank() == 0)
+    else:
+        local_rank = 0
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        is_main_process = True
+
+    if is_main_process:
+        print(f"Starting training on {device}...")
 
     # 1. Data
-    dataloader = create_dataloaders(CONFIG["data_dir"], batch_size=CONFIG["batch_size"], shuffle=True if not OVERFIT else False, augment=False)  # No shuffle or augmentation for overfitting
-
+    dataloader, sampler = create_dataloaders(
+        CONFIG["data_dir"], 
+        batch_size=CONFIG["batch_size"], 
+        shuffle=True if not OVERFIT else False, 
+        augment=False,
+        is_distributed=is_distributed # Pass the flag
+    )
     # Save target visualization
-    save_target_visualization(dataloader, device)
+    if is_main_process:
+        save_target_visualization(dataloader, device)
 
     # 2. Model
     model = GaussianVAE(
@@ -233,6 +255,11 @@ def main():
         input_dim=CONFIG["model"]["input_dim"],
         latent_dim=CONFIG["model"]["model_dim"],
     ).to(device)
+
+    if is_distributed:
+        # SyncBatchNorm is crucial if batch_size per GPU is small
+        model = nn.SyncBatchNorm.convert_sync_batchnorm(model) 
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model initialized: {total_params / 1e6:.2f}M Params")
@@ -248,11 +275,14 @@ def main():
     )
 
     # 4. Logging
-    wandb.init(project="gaussian-vae", config=CONFIG)
+    if is_main_process:
+        wandb.init(project="gaussian-vae", config=CONFIG)
     best_loss = float('inf')
 
     # --- Main Loop ---
     for epoch in range(1, CONFIG["train"]["max_epochs"] + 1):
+        if is_distributed and sampler is not None:
+            sampler.set_epoch(epoch)
         
         # KL Annealing: gradually increase from 0 to target over first 500 epochs
         kl_weight = min(0.01, 0.01 * epoch / 1000.0) if not OVERFIT else 0.0
@@ -263,47 +293,48 @@ def main():
         )
         current_lr = optimizer.param_groups[0]['lr']
     
-        # Checkpointing
-        if avg_loss < best_loss:
-            best_loss = avg_loss
+        if is_main_process:
+            # Unwrap DDP to get the real model weights and methods
+            raw_model: GaussianVAE = model.module if is_distributed else model # type: ignore
 
-            if epoch > 50:
-                torch.save(model.state_dict(), "best_gaussian_vae.pth")
-                print(f"--> New best model saved (Loss: {best_loss:.4f})")
+            # Checkpointing
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                if epoch > 50:
+                    # Save raw_model, not model
+                    torch.save(raw_model.state_dict(), "best_gaussian_vae.pth")
+                    print(f"--> New best model saved (Loss: {best_loss:.4f})")
             
-        # Log
-        wandb.log({
-            "epoch": epoch, 
-            "loss": avg_loss,
-            "recon_loss": avg_recon,
-            "kl_loss": avg_kl,
-            "kl_weight": kl_weight,
-            "sinkhorn_eps": sinkhorn_eps,
-            "learning_rate": current_lr,
-            "best_loss": best_loss
-        })
-        print(f"Epoch {epoch}/{CONFIG['train']['max_epochs']} | "
-              f"Loss: {avg_loss:.4f} (Recon: {avg_recon:.4f}, KL: {avg_kl:.6f}) | "
-              f"LR: {current_lr:.6f}")
+            # Log
+            wandb.log({
+                "epoch": epoch, 
+                "loss": avg_loss,
+                "recon_loss": avg_recon,
+                "kl_loss": avg_kl,
+                "kl_weight": kl_weight,
+                "sinkhorn_eps": sinkhorn_eps,
+                "learning_rate": current_lr,
+                "best_loss": best_loss
+            })
+            print(f"Epoch {epoch}/{CONFIG['train']['max_epochs']} | "
+                  f"Loss: {avg_loss:.4f} (Recon: {avg_recon:.4f}, KL: {avg_kl:.6f}) | "
+                  f"LR: {current_lr:.6f}")
 
-        # Step LR Scheduler (once per epoch)
-        lr_scheduler.step()
-            
-        # Periodic Sampling (sample from latent space)
-        if epoch % SAMPLE_SAVE_RATE == 0:
-            sample_from_latent(model, device, num_samples=5, epoch=epoch)
-        
-        if epoch % RECONSTRUCT_SAVE_RATE == 0:
-            visualize_reconstruction(model, dataloader, device, epoch=epoch)
-            
-        # Periodic Save
-        if epoch % 500 == 0:
-            torch.save(model.state_dict(), f"checkpoint_epoch_{epoch}.pth")
+            # Sampling
+            if epoch % SAMPLE_SAVE_RATE == 0:
+                # Pass raw_model so we can access .decode()
+                sample_from_latent(raw_model, device, num_samples=5, epoch=epoch)
+
+            if epoch % 500 == 0:
+                torch.save(raw_model.state_dict(), f"checkpoint_epoch_{epoch}.pth")
 
     # Final Wrap up
-    torch.save(model.state_dict(), "final_vae_model.pth")
-    print("Training Complete. Final model saved.")
-    wandb.finish()
+    if is_main_process:
+        # Unwrap one last time to be sure
+        raw_model: GaussianVAE = model.module if is_distributed else model # type: ignore
+        torch.save(raw_model.state_dict(), "final_vae_model.pth")
+        print("Training Complete. Final model saved.")
+        wandb.finish()
 
 if __name__ == "__main__":
     main()
