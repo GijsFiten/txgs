@@ -29,19 +29,6 @@ def set_random_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 
-def load_cfg(cfg_path: str, parser: ArgumentParser) -> ArgumentParser:
-    with open(cfg_path, "r", encoding='utf-8') as file:
-        cfg: dict = yaml.safe_load(file)
-    for key, value in cfg.items():
-        if value is None:
-            raise ValueError("'None' is not a supported value in the config file")
-        if isinstance(value, bool):
-            parser.add_argument(f"--{key}", action="store_true", default=value)
-        else:
-            parser.add_argument(f"--{key}", type=type(value), default=value)
-    return parser
-
-
 def save_cfg(path: str, args, mode="w"):
     with open(path, mode=mode, encoding='utf-8') as file:
         print("#################### Training Config ####################", file=file)

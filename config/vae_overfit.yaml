@@ -1,0 +1,20 @@
+data_dir: "./data/overfit/"
+output_dir: "./output/"
+batch_size: 1
+grad_accumulation: 1
+
+model:
+  num_gaussians: 1000
+  input_dim: 8
+  model_dim: 512
+
+train:
+  max_epochs: 2000
+  base_lr: 0.00025      # 25e-5
+  warmup_epochs: 30
+  sinkhorn_warmup_epochs: 50
+  clip_norm: 2.5
+
+logging:
+  sample_save_rate: 1000000
+  reconstruct_save_rate: 25

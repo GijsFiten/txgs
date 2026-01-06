@@ -239,7 +239,7 @@ def render(xy: torch.Tensor, scale: torch.Tensor, rot: torch.Tensor, feat: torch
     xy_proj, radii, conics, num_tiles_hit = tmp
 
     tmp = xy_proj, radii, conics, num_tiles_hit, feat, img_h, img_w, block_h, block_w, not disable_topk_norm
-    out_image = rasterize_gaussians_sum(*tmp)
+    out_image = rasterize_gaussians_sum(*tmp) # type: ignore
     out_image = out_image.view(-1, img_h, img_w, 3).permute(0, 3, 1, 2).contiguous()
     return out_image.squeeze(dim=0)
 
