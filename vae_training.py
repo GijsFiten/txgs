@@ -202,7 +202,9 @@ def main():
             train_sampler.set_epoch(epoch)
         
         # KL Annealing: gradually increase from 0 to target over first 500 epochs
-        kl_weight = min(0.01, 0.01 * epoch / 1000.0) if not overfit else 0.0
+        target_kl = 1.0
+        warmup_epochs = 200
+        kl_weight = min(target_kl, target_kl * epoch / warmup_epochs) if not overfit else 0.0
         sinkhorn_eps = max(0.001, 0.5 * (0.995 ** epoch)) 
               
         avg_loss, avg_recon, avg_kl = train_one_epoch(
