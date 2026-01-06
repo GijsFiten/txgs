@@ -20,4 +20,4 @@ conda activate /data/leuven/366/vsc36675/txgs/.conda
 nvidia-smi
 nvcc -V
 
-srun torchrun --standalone --nproc_per_node=4 ./vae_training.py
+srun torchrun --standalone --nproc_per_node=4 ./vae_training.py --config config/vae_training.yaml
