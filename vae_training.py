@@ -9,10 +9,10 @@ import os
 import argparse
 from tqdm import tqdm
 
-from utils.dataset_helper import create_dataloaders
+from utils.dataset_helper import create_dataloaders, create_train_val_dataloaders
 from vae_model import GaussianVAE, vae_loss_sinkhorn
 from utils.training_utils import get_warmup_cosine_scheduler
-from utils.vae_utils import sample_from_latent, save_target_visualization
+from utils.vae_utils import sample_from_latent, save_target_visualization, visualize_reconstruction
 import yaml
 
 def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=0.001, sinkhorn_eps=0.1):
@@ -82,6 +82,50 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
     
     return avg_loss, avg_recon, avg_kl
 
+def validate_one_epoch(model, dataloader, device, cfg, sinkhorn_eps=0.1):
+    model.eval()
+    epoch_loss = 0
+    epoch_recon_loss = 0
+    epoch_kl_loss = 0
+    valid_batches = 0
+    
+    # Don't use overfit logic during validation, always sample normally
+    # But usually for validation we might want deterministic behavior?
+    # standard VAE validation uses sampling to estimate NLL, 
+    # but for reconstruction visualization we use mean.
+    # Here we'll stick to sampling for loss calculation consistency.
+    
+    with torch.no_grad():
+        for batch in dataloader:
+            x = batch.to(device)
+            
+            # Forward pass
+            x_recon, mu, logvar = model(x, use_sampling=True)
+
+            # Compute VAE loss 
+            # Note: We use fixed weights for validation logging usually, or the same as training?
+            # It's better to report the unweighted components separateley.
+            # We'll use the same sinkhorn_eps as current training epoch for fair comparison
+            
+            loss, recon_loss, kl_loss = vae_loss_sinkhorn(
+                x_recon, x, mu, logvar,
+                recon_weight=1.0,
+                kl_weight=cfg.get("validation_kl_weight", 0.001), # validation weight could be fixed
+                sinkhorn_epsilon=sinkhorn_eps
+            )
+            
+            epoch_loss += loss.item()
+            epoch_recon_loss += recon_loss.item()
+            epoch_kl_loss += kl_loss.item()
+            valid_batches += 1
+            
+    avg_loss = epoch_loss / valid_batches if valid_batches > 0 else float('inf')
+    avg_recon = epoch_recon_loss / valid_batches if valid_batches > 0 else float('inf')
+    avg_kl = epoch_kl_loss / valid_batches if valid_batches > 0 else float('inf')
+    
+    model.train()
+    return avg_loss, avg_recon, avg_kl
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -110,16 +154,26 @@ def main():
         print(f"Starting training on {device}...")
 
     # 1. Data
-    dataloader, sampler = create_dataloaders(
+    # dataloader, sampler = create_dataloaders(
+    #     cfg["data_dir"], 
+    #     batch_size=cfg["batch_size"], 
+    #     shuffle=True if not overfit else False, 
+    #     augment=False,
+    #     is_distributed=is_distributed # Pass the flag
+    # )
+    
+    train_loader, val_loader, train_sampler, val_sampler = create_train_val_dataloaders(
         cfg["data_dir"], 
         batch_size=cfg["batch_size"], 
+        validation_split=cfg.get("validation_split", 0.05), # Default 5%
         shuffle=True if not overfit else False, 
-        augment=False,
-        is_distributed=is_distributed # Pass the flag
+        augment=cfg.get("augment", False), # Enable augmentation if config says so, default False based on previous logic 
+        is_distributed=is_distributed
     )
-    # Save target visualization
+    
+    # Save target visualization (using validation set for stable reference)
     if is_main_process:
-        save_target_visualization(dataloader, device, cfg)
+        save_target_visualization(val_loader, device, cfg)
 
     # 2. Model
     model = GaussianVAE(
@@ -149,33 +203,38 @@ def main():
     # 4. Logging
     if is_main_process:
         wandb.init(project="gaussian-vae", config=cfg)
-    best_loss = float('inf')
+    best_val_loss = float('inf')
 
     # --- Main Loop ---
     for epoch in range(1, cfg["train"]["max_epochs"] + 1):
-        if is_distributed and sampler is not None:
-            sampler.set_epoch(epoch)
+        if is_distributed and train_sampler is not None:
+            train_sampler.set_epoch(epoch)
         
         # KL Annealing: gradually increase from 0 to target over first 500 epochs
         kl_weight = min(0.01, 0.01 * epoch / 1000.0) if not overfit else 0.0
         sinkhorn_eps = max(0.001, 0.5 * (0.995 ** epoch)) 
               
         avg_loss, avg_recon, avg_kl = train_one_epoch(
-            model, dataloader, optimizer, device, epoch, cfg, kl_weight=kl_weight, sinkhorn_eps=sinkhorn_eps
+            model, train_loader, optimizer, device, epoch, cfg, kl_weight=kl_weight, sinkhorn_eps=sinkhorn_eps
         )
         current_lr = optimizer.param_groups[0]['lr']
+        
+        # Validation Loop
+        val_loss, val_recon, val_kl = validate_one_epoch(
+            model, val_loader, device, cfg, sinkhorn_eps=sinkhorn_eps
+        )
     
         if is_main_process:
             # Unwrap DDP to get the real model weights and methods
             raw_model: GaussianVAE = model.module if is_distributed else model # type: ignore
 
             # Checkpointing
-            if avg_loss < best_loss:
-                best_loss = avg_loss
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
                 if epoch > 50:
                     # Save raw_model, not model
                     torch.save(raw_model.state_dict(), "best_gaussian_vae.pth")
-                    print(f"--> New best model saved (Loss: {best_loss:.4f})")
+                    print(f"--> New best model saved (Val Loss: {best_val_loss:.4f})")
             
             # Log
             wandb.log({
@@ -183,13 +242,17 @@ def main():
                 "loss": avg_loss,
                 "recon_loss": avg_recon,
                 "kl_loss": avg_kl,
+                "val_loss": val_loss,
+                "val_recon_loss": val_recon,
+                "val_kl_loss": val_kl,
                 "kl_weight": kl_weight,
                 "sinkhorn_eps": sinkhorn_eps,
                 "learning_rate": current_lr,
-                "best_loss": best_loss
+                "best_val_loss": best_val_loss
             })
             print(f"Epoch {epoch}/{cfg['train']['max_epochs']} | "
-                  f"Loss: {avg_loss:.4f} (Recon: {avg_recon:.4f}, KL: {avg_kl:.6f}) | "
+                  f"Train Loss: {avg_loss:.4f} (Recon: {avg_recon:.4f}, KL: {avg_kl:.6f}) | "
+                  f"Val Loss: {val_loss:.4f} (Recon: {val_recon:.4f}, KL: {val_kl:.6f}) | "
                   f"LR: {current_lr:.6f}")
 
             # Sampling
@@ -197,6 +260,11 @@ def main():
                 # Pass raw_model so we can access .decode()
                 sample_from_latent(raw_model, device, cfg, num_samples=5, epoch=epoch)
 
+            # Reconstruction
+            if epoch % cfg["logging"].get("reconstruct_save_rate", 100) == 0:
+                visualize_reconstruction(raw_model, val_loader, device, cfg, epoch=epoch)
+
+            # Checkpointing every 500 epochs
             if epoch % 500 == 0:
                 torch.save(raw_model.state_dict(), f"checkpoint_epoch_{epoch}.pth")
 

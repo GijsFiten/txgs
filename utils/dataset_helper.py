@@ -9,21 +9,27 @@ from .diffusion_data_helper import normalize_data
 from .gaussian_file_helper import load_gaussians
 
 class GaussianSplatDataset(Dataset):
-    def __init__(self, data_dir, device="cpu", augment=False):
+    def __init__(self, data_dir, device="cpu", augment=False, file_paths=None):
         """
         Args:
             data_dir (str): Path to folder containing .npz files
             device (str): Device for temporary loading ('cpu' recommended for dataloader)
             augment (bool): Whether to apply data augmentation
+            file_paths (list): Optional list of file paths. If provided, ignores data_dir glob.
         """
-        self.file_paths = glob.glob(os.path.join(data_dir, "*.npz"))
+        if file_paths is not None:
+            self.file_paths = file_paths
+        else:
+            self.file_paths = glob.glob(os.path.join(data_dir, "*.npz"))
+            
         self.device = device
         self.augment = augment
         
         if len(self.file_paths) == 0:
             print(f"Warning: No .npz files found in {data_dir}")
         else:
-            print(f"Found {len(self.file_paths)} files in {data_dir}")
+            if file_paths is None:
+                print(f"Found {len(self.file_paths)} files in {data_dir}")
 
     def __len__(self):
         return len(self.file_paths)
@@ -160,7 +166,6 @@ class GaussianSplatDataset(Dataset):
         
         # Normalize rotation to [-π, π]
         rot = torch.atan2(torch.sin(rot), torch.cos(rot))
-        
         return xy, scale, rot, feat
 
 def create_dataloaders(data_dir, batch_size=32, num_points=1000, shuffle=True, augment=False, is_distributed=False):
@@ -192,3 +197,66 @@ def create_dataloaders(data_dir, batch_size=32, num_points=1000, shuffle=True, a
     
     # 3. Return the sampler too! You need it for set_epoch() in the training loop.
     return dataloader, sampler
+
+
+def create_train_val_dataloaders(data_dir, batch_size=32, validation_split=0.05, shuffle=True, augment=True, is_distributed=False):
+    all_files = glob.glob(os.path.join(data_dir, "*.npz"))
+    
+    # Deterministic shuffle for splitting
+    # We sort first to ensure order before shuffle across different processes, then use fixed seed
+    all_files.sort()
+    rng = np.random.RandomState(42)
+    rng.shuffle(all_files)
+    
+    val_size = int(len(all_files) * validation_split)
+    # Ensure at least one validation file if dataset is large enough
+    if val_size == 0 and len(all_files) > 0:
+         val_size = 1
+    
+    # Check if dataset is empty
+    if len(all_files) == 0:
+        print(f"Warning: No files found in {data_dir}")
+        train_files = []
+        val_files = []
+    else:
+        train_files = all_files[val_size:]
+        val_files = all_files[:val_size]
+    
+    print(f"Dataset split: {len(train_files)} training, {len(val_files)} validation files")
+
+    # Train dataset (with augmentation)
+    train_dataset = GaussianSplatDataset(data_dir, augment=augment, file_paths=train_files)
+    
+    # Val dataset (no augmentation)
+    val_dataset = GaussianSplatDataset(data_dir, augment=False, file_paths=val_files)
+
+    train_sampler = None
+    val_sampler = None
+
+    if is_distributed:
+        train_sampler = DistributedSampler(train_dataset, shuffle=shuffle)
+        val_sampler = DistributedSampler(val_dataset, shuffle=False)
+
+    # Train DataLoader
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=batch_size,
+        shuffle=(shuffle and not is_distributed), 
+        sampler=train_sampler, 
+        num_workers=4,
+        pin_memory=True,
+        drop_last=True 
+    )
+    
+    # Val DataLoader
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=batch_size,
+        shuffle=False, 
+        sampler=val_sampler, 
+        num_workers=4,
+        pin_memory=True,
+        drop_last=False
+    )
+    
+    return train_loader, val_loader, train_sampler, val_sampler
