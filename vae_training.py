@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
+from contextlib import nullcontext
 
 import wandb
 import os
@@ -31,23 +32,36 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
         # Move data to device
         x = batch.to(device)  # [B, N, 8]
         
-        # Forward pass - DETERMINISTIC for overfitting
-        x_recon, mu, logvar = model(x, use_sampling=True if not overfit else False)
-
-        # Compute VAE loss using Sinkhorn with annealing
-        loss, recon_loss, kl_loss = vae_loss_sinkhorn(
-            x_recon, x, mu, logvar, 
-            recon_weight=1.0, 
-            kl_weight=kl_weight,
-            sinkhorn_epsilon=sinkhorn_eps
-        )
+        # Determine if we should sync gradients (only on the step where optimizer.step() runs)
+        # We sync on the LAST sub-step of the accumulation.
+        # If grad_accumulation is 1, we always sync.
+        should_sync = ((batch_idx + 1) % cfg["grad_accumulation"] == 0)
         
-        # Backward pass with gradient accumulation
-        loss = loss / cfg["grad_accumulation"]
-        loss.backward()
+        # Use no_sync() context if we are NOT syncing (and if model is DDP)
+        # If the model is not DDP, no_sync is not available, but nullcontext handles it if we structured perfectly.
+        # However, DDP wrapper adds no_sync. If not distributed, model is raw.
+        # We need to be careful.
+        
+        my_context = model.no_sync() if (isinstance(model, DDP) and not should_sync) else nullcontext()
+
+        with my_context:
+            # Forward pass - DETERMINISTIC for overfitting
+            x_recon, mu, logvar = model(x, use_sampling=True if not overfit else False)
+
+            # Compute VAE loss using Sinkhorn with annealing
+            loss, recon_loss, kl_loss = vae_loss_sinkhorn(
+                x_recon, x, mu, logvar, 
+                recon_weight=1.0, 
+                kl_weight=kl_weight,
+                sinkhorn_epsilon=sinkhorn_eps
+            )
+            
+            # Backward pass with gradient accumulation
+            loss = loss / cfg["grad_accumulation"]
+            loss.backward()
         
         # Gradient accumulation step
-        if (batch_idx + 1) % cfg["grad_accumulation"] == 0:
+        if should_sync:
             # Clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["train"]["clip_norm"])
             
