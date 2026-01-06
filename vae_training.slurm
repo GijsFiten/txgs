@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=gaussian_vae_v3
+#SBATCH --job-name=gaussian_vae_ffhq_ddu
 #SBATCH --account=lp_emediaxr
 #SBATCH --time=24:00:00
 #SBATCH --clusters=wice
@@ -7,8 +7,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gpus-per-node=1
-#SBATCH --mem=16G
+#SBATCH --gpus-per-node=4
+#SBATCH --mem=32G
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 
@@ -20,4 +20,4 @@ conda activate /data/leuven/366/vsc36675/txgs/.conda
 nvidia-smi
 nvcc -V
 
-python -u vae_training.py
+srun torchrun --standalone --nproc_per_node=4 ./vae_training.py
