@@ -152,15 +152,6 @@ def main():
 
     if is_main_process:
         print(f"Starting training on {device}...")
-
-    # 1. Data
-    # dataloader, sampler = create_dataloaders(
-    #     cfg["data_dir"], 
-    #     batch_size=cfg["batch_size"], 
-    #     shuffle=True if not overfit else False, 
-    #     augment=False,
-    #     is_distributed=is_distributed # Pass the flag
-    # )
     
     train_loader, val_loader, train_sampler, val_sampler = create_train_val_dataloaders(
         cfg["data_dir"], 
@@ -267,6 +258,9 @@ def main():
             # Checkpointing every 500 epochs
             if epoch % 500 == 0:
                 torch.save(raw_model.state_dict(), f"checkpoint_epoch_{epoch}.pth")
+
+        # Step the scheduler
+        lr_scheduler.step()
 
     # Final Wrap up
     if is_main_process:

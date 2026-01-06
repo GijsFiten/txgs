@@ -47,17 +47,13 @@ class GaussianSplatDataset(Dataset):
             
             # Check for NaN or Inf in raw data
             if torch.isnan(xy).any() or torch.isinf(xy).any():
-                print(f"Warning: NaN/Inf in xy for {path}")
-                return torch.zeros(1000, 8)
+                raise ValueError(f"NaN/Inf in xy")
             if torch.isnan(scale).any() or torch.isinf(scale).any():
-                print(f"Warning: NaN/Inf in scale for {path}")
-                return torch.zeros(1000, 8)
+                raise ValueError(f"NaN/Inf in scale")
             if torch.isnan(rot).any() or torch.isinf(rot).any():
-                print(f"Warning: NaN/Inf in rot for {path}")
-                return torch.zeros(1000, 8)
+                raise ValueError(f"NaN/Inf in rot")
             if torch.isnan(feat).any() or torch.isinf(feat).any():
-                print(f"Warning: NaN/Inf in feat for {path}")
-                return torch.zeros(1000, 8)
+                raise ValueError(f"NaN/Inf in feat")
             
             # Handle grayscale
             if feat.shape[1] == 1:
@@ -66,32 +62,33 @@ class GaussianSplatDataset(Dataset):
             # Apply augmentation BEFORE normalization
             if self.augment:
                 xy, scale, rot, feat = self.augment_gaussians(xy, scale, rot, feat)
-                
-        except Exception as e:
-            print(f"Error loading {path}: {e}")
-            return torch.zeros(1000, 8)
-        
-        # Normalize the data
-        xy_n, scale_n, rot_n, feat_n = normalize_data(xy, scale, rot, feat)
-        
-        # Sort by scale norm
-        scale_norms = torch.norm(scale_n, dim=1)
-        sorted_indices = torch.argsort(scale_norms, descending=True)
-        
-        xy_n = xy_n[sorted_indices]
-        scale_n = scale_n[sorted_indices]
-        rot_n = rot_n[sorted_indices]
-        feat_n = feat_n[sorted_indices]
-        
-        # Check for NaN after normalization
-        if torch.isnan(xy_n).any() or torch.isnan(scale_n).any() or torch.isnan(rot_n).any() or torch.isnan(feat_n).any():
-            print(f"Warning: NaN after normalization for {path}")
-            return torch.zeros(1000, 8)
-        
-        # Concatenate all normalized features
-        x_0 = torch.cat([xy_n, scale_n, rot_n, feat_n], dim=-1)
+            
+            # Normalize the data
+            xy_n, scale_n, rot_n, feat_n = normalize_data(xy, scale, rot, feat)
+            
+            # Sort by scale norm
+            scale_norms = torch.norm(scale_n, dim=1)
+            sorted_indices = torch.argsort(scale_norms, descending=True)
+            
+            xy_n = xy_n[sorted_indices]
+            scale_n = scale_n[sorted_indices]
+            rot_n = rot_n[sorted_indices]
+            feat_n = feat_n[sorted_indices]
+            
+            # Check for NaN after normalization
+            if torch.isnan(xy_n).any() or torch.isnan(scale_n).any() or torch.isnan(rot_n).any() or torch.isnan(feat_n).any():
+                raise ValueError(f"NaN after normalization")
+            
+            # Concatenate all normalized features
+            x_0 = torch.cat([xy_n, scale_n, rot_n, feat_n], dim=-1)
 
-        return x_0
+            return x_0
+
+        except Exception as e:
+            # print(f"Error loading {path}: {e}")
+            # Recursive fallback to next item
+            next_idx = (idx + 1) % len(self)
+            return self.__getitem__(next_idx)
     
     def augment_gaussians(self, xy, scale, rot, feat):
         """
@@ -225,7 +222,7 @@ def create_train_val_dataloaders(data_dir, batch_size=32, validation_split=0.05,
     print(f"Dataset split: {len(train_files)} training, {len(val_files)} validation files")
 
     # Train dataset (with augmentation)
-    train_dataset = GaussianSplatDataset(data_dir, augment=augment, file_paths=train_files)
+    train_dataset = GaussianSplatDataset(data_dir, augment=augment, file_paths=train_files) # Augmentation can be turned on later if needed
     
     # Val dataset (no augmentation)
     val_dataset = GaussianSplatDataset(data_dir, augment=False, file_paths=val_files)

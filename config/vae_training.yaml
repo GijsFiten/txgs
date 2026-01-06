@@ -1,6 +1,6 @@
-data_dir: "./data/FFHQ/"
+data_dir: "./data/FFHQ_testingsubset/"
 output_dir: "./output/"
-batch_size: 96
+batch_size: 4
 grad_accumulation: 4
 
 model:
