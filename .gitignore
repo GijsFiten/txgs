@@ -226,6 +226,7 @@ data/FFHQ_testingsubset/*
 gsplat/
 output/
 wandb/
+backup
 
 *.pth
 slurm*

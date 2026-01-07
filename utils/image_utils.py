@@ -229,6 +229,19 @@ def save_error_maps(path, images, gt_images, channels, gamma, save_image_format=
 
 def render(xy: torch.Tensor, scale: torch.Tensor, rot: torch.Tensor, feat: torch.Tensor, img_size=(512, 512), disable_topk_norm=False, ):
 
+    if torch.isnan(xy).any() or torch.isinf(xy).any():
+        print("NaN or Inf found in xy")
+        # raise ValueError("NaN or Inf found in xy")
+    if torch.isnan(scale).any() or torch.isinf(scale).any():
+        print("NaN or Inf found in scale")
+        # raise ValueError("NaN or Inf found in scale")
+    if torch.isnan(rot).any() or torch.isinf(rot).any():
+        print("NaN or Inf found in rot")
+        # raise ValueError("NaN or Inf found in rot")
+    if torch.isnan(feat).any() or torch.isinf(feat).any():
+        print("NaN or Inf found in feat")
+        # raise ValueError("NaN or Inf found in feat")
+
     block_w, block_h = 16, 16
     img_h = img_size[0]
     img_w = img_size[1]

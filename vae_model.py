@@ -3,7 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from utils.pointnet_utils import PointNetSetAbstraction, PointNetSetAbstractionMsg, PointNetFeaturePropagation
 from scipy.optimize import linear_sum_assignment
-
+import lpips
+from utils.diffusion_data_helper import denormalize_data
+from utils.image_utils import render
 
 # This is a VAE model which takes in 2D Gaussian splats and encodes them into a latent space
 # For now we always take in a fixed number of gaussians (e.g., 1000)
@@ -276,3 +278,65 @@ def sinkhorn_matching(cost_matrix, epsilon=0.1, max_iter=50):
         
     # Convert back to probability space for the final multiplication
     return torch.exp(log_P)
+
+# Global cache for LPIPS model to avoid reloading
+_LPIPS_FN = None
+
+def get_lpips_fn(device):
+    global _LPIPS_FN
+    if _LPIPS_FN is None:
+        _LPIPS_FN = lpips.LPIPS(net='vgg').to(device)
+    # Ensure it's on the correct device (in case of multi-gpu/device switching)
+    if next(_LPIPS_FN.parameters()).device != device:
+        _LPIPS_FN = _LPIPS_FN.to(device)
+    return _LPIPS_FN
+
+# Final LPIPS loss using the differentiable rasterizer
+def gaussian_lpips_loss(x_source, x_recon, device):
+    """
+    Computes LPIPS loss between rendered images of source and reconstructed gaussians.
+    x_source, x_recon: [B, N, 8] (Normalized Gaussian parameters)
+    """
+    batch_size = x_source.shape[0]
+    
+    # render expects individual components, so we need to separate them
+    # and also denormalize them because render expects world coordinates (or [0,1] for image coords)
+    
+    # Slice features: xy (0-2), scale (2-4), rot (4-5), feat (5-8)
+    src_xy, src_scale, src_rot, src_feat = denormalize_data(
+        x_source[..., 0:2], x_source[..., 2:4], x_source[..., 4:5], x_source[..., 5:8]
+    )
+    rec_xy, rec_scale, rec_rot, rec_feat = denormalize_data(
+        x_recon[..., 0:2], x_recon[..., 2:4], x_recon[..., 4:5], x_recon[..., 5:8]
+    )
+
+    rendered_src = []
+    rendered_rec = []
+    
+    # Assuming standard image size 512x512 matching training/utils defaults
+    IMG_SIZE = (512, 512)
+
+    for b in range(batch_size):
+        # Render source (ground truth)
+        # render returns [3, H, W]
+        img_s = render(src_xy[b], src_scale[b], src_rot[b], src_feat[b], img_size=IMG_SIZE)
+        rendered_src.append(img_s)
+
+        # Render reconstruction
+        img_r = render(rec_xy[b], rec_scale[b], rec_rot[b], rec_feat[b], img_size=IMG_SIZE)
+        rendered_rec.append(img_r)
+
+    # Stack images: [B, 3, H, W]
+    images_src = torch.stack(rendered_src)
+    images_rec = torch.stack(rendered_rec)
+    
+    # LPIPS expects input in [-1, 1], but our render output is likely [0, 1] (colors)
+    # We should also clamp to ensure valid range before scaling
+    images_src = torch.clamp(images_src, 0.0, 1.0) * 2.0 - 1.0
+    images_rec = torch.clamp(images_rec, 0.0, 1.0) * 2.0 - 1.0
+
+    loss_fn = get_lpips_fn(device)
+    # loss_fn returns [B, 1, 1, 1] tensor
+    lpips_loss = loss_fn(images_src, images_rec)
+    
+    return lpips_loss.mean()

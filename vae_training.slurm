@@ -3,12 +3,12 @@
 #SBATCH --account=lp_emediaxr
 #SBATCH --time=24:00:00
 #SBATCH --clusters=wice
-#SBATCH --partition=gpu_h100
+#SBATCH --partition=gpu_a100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=16
 #SBATCH --gpus-per-node=4
-#SBATCH --mem=128G
+#SBATCH --mem=32G
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 
@@ -21,6 +21,6 @@ nvidia-smi
 nvcc -V
 
 # 4 GPUs on a single node: optimize threads
-export OMP_NUM_THREADS=8
+export OMP_NUM_THREADS=4
 
 srun torchrun --standalone --nproc_per_node=4 ./vae_training.py --config config/vae_training.yaml

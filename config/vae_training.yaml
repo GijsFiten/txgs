@@ -1,6 +1,6 @@
 data_dir: "./data/FFHQ/"
 output_dir: "./output/"
-batch_size: 96
+batch_size: 48
 grad_accumulation: 4
 
 model:
@@ -9,11 +9,16 @@ model:
   model_dim: 512
 
 train:
-  max_epochs: 10000
+  max_epochs: 5000
   base_lr: 0.00005      # 5e-5
   warmup_epochs: 150
   sinkhorn_warmup_epochs: 200
   clip_norm: 2.5
+  
+  # Weights
+  max_kl_weight: 1.0
+  recon_weight: 0.1
+  lpips_weight: 0.1
 
 logging:
   sample_save_rate: 500

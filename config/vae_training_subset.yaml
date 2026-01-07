@@ -1,0 +1,25 @@
+data_dir: "./data/FFHQ_testingsubset/"
+output_dir: "./output/"
+batch_size: 1
+grad_accumulation: 4
+
+model:
+  num_gaussians: 1000
+  input_dim: 8
+  model_dim: 512
+
+train:
+  max_epochs: 2000
+  base_lr: 0.0001      # 1e-4
+  warmup_epochs: 50
+  sinkhorn_warmup_epochs: 200
+  clip_norm: 2.5
+  
+  # Weights
+  max_kl_weight: 0.1 # Target KL weight after warmup
+  recon_weight: 0.001  # Sinkhorn loss weight
+  lpips_weight: 10.0  # LPIPS loss weight
+
+logging:
+  sample_save_rate: 50
+  reconstruct_save_rate: 25
