@@ -285,7 +285,7 @@ _LPIPS_FN = None
 def get_lpips_fn(device):
     global _LPIPS_FN
     if _LPIPS_FN is None:
-        _LPIPS_FN = lpips.LPIPS(net='vgg').to(device)
+        _LPIPS_FN = lpips.LPIPS(net='alex').to(device)
     # Ensure it's on the correct device (in case of multi-gpu/device switching)
     if next(_LPIPS_FN.parameters()).device != device:
         _LPIPS_FN = _LPIPS_FN.to(device)

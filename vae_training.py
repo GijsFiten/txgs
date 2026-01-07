@@ -77,11 +77,12 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
         # Accumulate losses
         # Log metrics using maximum weights to avoid artifacts from annealing
         max_kl_weight = cfg["train"].get("max_kl_weight", 1.0)
+        max_lpips_weight = cfg["train"].get("lpips_weight", 0.1)
         
         epoch_loss += total_loss.item()
         epoch_recon_loss += recon_loss.item() * recon_weight
         epoch_kl_loss += kl_loss.item() * max_kl_weight
-        epoch_lpips_loss += lpips_val.item() * lpips_weight
+        epoch_lpips_loss += lpips_val.item() * max_lpips_weight
         valid_batches += 1
         
         # Update progress bar
@@ -89,7 +90,7 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
             'loss': f'{total_loss.item():.4f}',
             'recon': f'{recon_loss.item() * recon_weight:.4f}',
             'kl': f'{kl_loss.item() * max_kl_weight:.6f}',
-            'lpips': f'{lpips_val.item() * lpips_weight:.4f}',
+            'lpips': f'{lpips_val.item() * max_lpips_weight:.4f}',
             'eps': f'{sinkhorn_eps:.5f}'
         })
     
@@ -107,7 +108,7 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
     
     return avg_loss, avg_recon, avg_kl, avg_lpips
 
-def validate_one_epoch(model, dataloader, device, cfg, sinkhorn_eps=0.1, recon_weight=0.1, lpips_weight=0.1):
+def validate_one_epoch(model, dataloader, device, cfg, sinkhorn_eps=0.1, recon_weight=0.1, lpips_weight=0.1, kl_weight=0.001):
     model.eval()
     epoch_loss = 0
     epoch_recon_loss = 0
@@ -115,7 +116,8 @@ def validate_one_epoch(model, dataloader, device, cfg, sinkhorn_eps=0.1, recon_w
     epoch_lpips_loss = 0
     valid_batches = 0
     
-    lpips_weight = cfg.get("lpips_weight", lpips_weight) # Fallback to argument or config override if present in root (legacy)
+    max_kl_weight = cfg["train"].get("max_kl_weight", 1.0)
+    max_lpips_weight = cfg["train"].get("lpips_weight", 0.1)
 
     with torch.no_grad():
         for batch in dataloader:
@@ -125,7 +127,7 @@ def validate_one_epoch(model, dataloader, device, cfg, sinkhorn_eps=0.1, recon_w
             vae_loss, recon_loss, kl_loss = vae_loss_sinkhorn(
                 x_recon, x, mu, logvar,
                 recon_weight=recon_weight,
-                kl_weight=cfg.get("validation_kl_weight", 0.001), # validation weight could be fixed
+                kl_weight=kl_weight,
                 sinkhorn_epsilon=sinkhorn_eps
             )
             
@@ -133,9 +135,9 @@ def validate_one_epoch(model, dataloader, device, cfg, sinkhorn_eps=0.1, recon_w
             total_loss = vae_loss + lpips_weight * lpips_val
             
             epoch_loss += total_loss.item()
-            epoch_recon_loss += recon_loss.item() * recon_weight
-            epoch_kl_loss += kl_loss.item() * cfg.get("validation_kl_weight", 0.001)
-            epoch_lpips_loss += lpips_val.item() * lpips_weight
+            epoch_kl_loss += kl_loss.item() * max_kl_weight
+            epoch_lpips_loss += lpips_val.item() * max_lpips_weight
+            valid_batches += 1= lpips_val.item() * lpips_weight
             valid_batches += 1
             
     avg_loss = epoch_loss / valid_batches if valid_batches > 0 else float('inf')
@@ -203,7 +205,7 @@ def train_vae():
     
     lr_scheduler = get_warmup_cosine_scheduler(
         optimizer, 
-        warmup_epochs=cfg["train"]["warmup_epochs"], 
+        warmup_epochs=cfg["train"]["lr_warmup_epochs"], 
         max_epochs=cfg["train"]["max_epochs"]
     )
 
@@ -216,24 +218,17 @@ def train_vae():
             train_sampler.set_epoch(epoch)
         
         target_kl = cfg["train"].get("max_kl_weight", 1.0)
-        warmup_epochs = cfg["train"].get("warmup_epochs", 200) # Use the same warmup
-        # Or should we have a separate kl_warmup_epochs? existing code used warmup_epochs hardcoded/from variable context
-        # In existing code: warmup_epochs = 200. "train" block has warmup_epochs: 150.
-        # The code had `warmup_epochs = 200` locally defined.
         
-        # Let's clean this up.
-        # Existing code:
-        # target_kl = 1.0
-        # warmup_epochs = 200
-        # kl_weight = min(target_kl, target_kl * epoch / warmup_epochs) if not overfit else 0.0
-        
-        kl_warmup = 200 # keeping hardcoded default as fallback or separate config? keeping as before but using target_kl
+        kl_warmup = cfg["train"].get("kl_warmup_epochs", 500)
         
         kl_weight = min(target_kl, target_kl * epoch / kl_warmup) if not overfit else 0.0
-        sinkhorn_eps = max(0.001, 0.5 * (0.995 ** epoch)) 
+        sinkhorn_eps = max(0.001, 0.5 * ((1 - 1 / cfg["train"].get("sinkhorn_warmup_epochs", 200)) ** epoch)) 
         
         recon_weight = cfg["train"].get("recon_weight", 0.1)
+
         lpips_weight = cfg["train"].get("lpips_weight", 0.1)
+        lpips_scale = min(1.0, epoch / cfg["train"].get("lpips_warmup_epochs", 200))
+        lpips_weight = lpips_weight * lpips_scale
               
         avg_loss, avg_recon, avg_kl, avg_lpips = train_one_epoch(
             model, train_loader, optimizer, device, epoch, cfg, 
@@ -246,6 +241,7 @@ def train_vae():
         
         val_loss, val_recon, val_kl, val_lpips = validate_one_epoch(
             model, val_loader, device, cfg, sinkhorn_eps=sinkhorn_eps,
+            kl_weight=kl_weight,
             recon_weight=recon_weight,
             lpips_weight=lpips_weight
         )
