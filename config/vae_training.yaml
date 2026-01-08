@@ -18,8 +18,9 @@ train:
 
   target_recon_weight: 1.0
 
-  target_kl_weight: 0.01
-  kl_warmup_epochs: 200
+  target_kl_weight: 0.0001
+  kl_disabled_epochs: 200
+  kl_warmup_epochs: 1000
 
   sinkhorn_warmup_epochs: 400
   clip_norm: 2.5
@@ -27,3 +28,4 @@ train:
 logging:
   sample_save_rate: 200
   reconstruct_save_rate: 100
+  model_save_rate: 500

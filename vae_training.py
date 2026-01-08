@@ -231,7 +231,16 @@ def main():
         
         target_kl = cfg["train"].get("target_kl_weight", 0.001)
         kl_warmup_epochs = cfg["train"].get("kl_warmup_epochs", 500)
-        kl_weight = min(target_kl, target_kl * epoch / kl_warmup_epochs) if not cfg["overfit"] else 0.0
+        kl_disabled_epochs = cfg["train"].get("kl_disabled_epochs", 0)
+        
+        if cfg["overfit"]:
+            kl_weight = 0.0
+        elif epoch <= kl_disabled_epochs:
+            kl_weight = 0.0
+        else:
+            # Start warmup after disabled period
+            warmup_progress = (epoch - kl_disabled_epochs) / kl_warmup_epochs
+            kl_weight = min(target_kl, target_kl * warmup_progress)
 
         sinkhorn_eps = max(0.001, 0.5 * (0.995 ** epoch)) 
               
@@ -296,7 +305,7 @@ def main():
                     visualize_reconstruction(raw_model, train_loader, device, cfg, epoch=epoch)
 
             # Checkpointing every 500 epochs
-            if epoch % 500 == 0:
+            if epoch % cfg["logging"].get("model_save_rate", 500) == 0:
                 torch.save(raw_model.state_dict(), f"checkpoint_epoch_{epoch}.pth")
 
         # Step the scheduler
