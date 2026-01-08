@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from utils.pointnet_utils import PointNetSetAbstraction, PointNetSetAbstractionMsg, PointNetFeaturePropagation
 from scipy.optimize import linear_sum_assignment
 import lpips
+from fused_ssim import fused_ssim
 from utils.diffusion_data_helper import denormalize_data
 from utils.image_utils import render
 
@@ -139,14 +140,29 @@ class GaussianVAE(nn.Module):
         # Run Decoder
         x_recon = self.decoder(z) 
         
-        # Clamps to prevent Inf/NaNs in rasterizer
-        xy = torch.clamp(x_recon[:, :, 0:2], -5.0, 5.0)
+        # 1. Position: xy
+        # We use Tanh to bound it roughly within the expected normalized range.
+        # denormalize logic: xy = x_recon * 0.2 + 0.5
+        # We want xy in [0, 1].
+        # Tanh gives [-1, 1]. Multiplying by 2.5 gives [-2.5, 2.5].
+        # [-2.5, 2.5] * 0.2 + 0.5 = [-0.5, 0.5] + 0.5 = [0.0, 1.0]. Perfect.
+        xy = torch.tanh(x_recon[:, :, 0:2]) * 2.5
         
-        # Hard clamp scale before exp to prevent overflow
-        scale_norm = torch.clamp(x_recon[:, :, 2:4], max=5.0)
+        # 2. Scale
+        # denormalize logic: scale = exp(x_recon * 2 + 3)
+        # We use Tanh to prevent exponential explosion.
+        # Range [-1, 1] -> Exponent [-1*2+3, 1*2+3] = [1, 5]
+        # exp(1)=2.7, exp(5)=148. This prevents massive scales (e.g. 10^5) that killed gradients.
+        scale_norm = torch.tanh(x_recon[:, :, 2:4])
         
+        # 3. Rotation
+        # Passed through as-is, rotation is periodic.
         rot = x_recon[:, :, 4:5]
-        feat = x_recon[:, :, 5:8]
+        
+        # 4. Color / Feature
+        # denormalize logic: feat = (x_recon + 1) / 2
+        # Tanh gives [-1, 1]. This maps perfectly to [0, 1] color intensity without hard clamping gradients.
+        feat = torch.tanh(x_recon[:, :, 5:8])
         
         return torch.cat([xy, scale_norm, rot, feat], dim=-1)
     
@@ -241,7 +257,7 @@ def vae_loss_sinkhorn(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001,
     
     # 3. Compute Transport Cost (Sinkhorn Loss)
     # Sum over N, N, average over B
-    recon_loss = torch.sum(P * cost_matrix) / B
+    recon_loss = torch.sum(P * cost_matrix) / (B * x.shape[1])
 
     
     # KL Divergence
@@ -340,3 +356,54 @@ def gaussian_lpips_loss(x_source, x_recon, device):
     lpips_loss = loss_fn(images_src, images_rec)
     
     return lpips_loss.mean()
+
+def gaussian_visual_loss(x_source, x_recon, device):
+    """
+    Computes L1 + SSIM loss between rendered images.
+    This provides both color accuracy (L1) and structural accuracy (SSIM).
+    This is much more stable than LPIPS and standard for Splatting.
+    """
+    # Safety Check
+    if torch.isnan(x_recon).any() or torch.isinf(x_recon).any():
+        return torch.tensor(0.0, device=device)
+
+    batch_size = x_source.shape[0]
+    
+    # ... (Descaling code same as before) ... 
+    src_xy, src_scale, src_rot, src_feat = denormalize_data(
+        x_source[..., 0:2], x_source[..., 2:4], x_source[..., 4:5], x_source[..., 5:8]
+    )
+    rec_xy, rec_scale, rec_rot, rec_feat = denormalize_data(
+        x_recon[..., 0:2], x_recon[..., 2:4], x_recon[..., 4:5], x_recon[..., 5:8]
+    )
+    
+    # ... (Rendering loop same as before) ...
+    rendered_src = []
+    rendered_rec = []
+    
+    IMG_SIZE = (512, 512)
+
+    for b in range(batch_size):
+        img_s = render(src_xy[b], src_scale[b], src_rot[b], src_feat[b], img_size=IMG_SIZE)
+        rendered_src.append(img_s)
+
+        img_r = render(rec_xy[b], rec_scale[b], rec_rot[b], rec_feat[b], img_size=IMG_SIZE)
+        
+        if torch.isnan(img_r).any() or torch.isinf(img_r).any():
+             return torch.tensor(0.0, device=device)
+
+        rendered_rec.append(img_r)
+
+    images_src = torch.stack(rendered_src)
+    images_rec = torch.stack(rendered_rec)
+
+    # 1. L1 Loss
+    l1_loss = F.l1_loss(images_rec, images_src)
+    
+    # 2. SSIM Loss (1 - SSIM)
+    # SSIM returns value between 0 and 1 (1 is perfect match)
+    # We want to minimize (1 - ssim)
+    ssim_val = fused_ssim(images_rec, images_src, padding="valid")
+    ssim_loss = 1.0 - ssim_val
+
+    return l1_loss, ssim_loss

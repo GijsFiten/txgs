@@ -13,15 +13,17 @@ train:
   base_lr: 0.00005      # 5e-5
   lr_warmup_epochs: 150
   kl_warmup_epochs: 500
-  lpips_warmup_epochs: 1000
+  vis_warmup_epochs: 1000
   sinkhorn_warmup_epochs: 200
   clip_norm: 2.5
   
   # Weights
+  recon_weight: 1.0
   max_kl_weight: 0.1
-  recon_weight: 0.1
-  lpips_weight: 100.0
+  l1_weight: 0.1
+  ssim_weight: 0.1
 
 logging:
   sample_save_rate: 500
   reconstruct_save_rate: 100
+  checkpoint_save_rate: 500

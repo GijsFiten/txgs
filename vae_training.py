@@ -11,20 +11,19 @@ import argparse
 from tqdm import tqdm
 
 from utils.dataset_helper import create_dataloaders, create_train_val_dataloaders
-from vae_model import GaussianVAE, vae_loss_sinkhorn, gaussian_lpips_loss
+from vae_model import GaussianVAE, vae_loss_sinkhorn, gaussian_visual_loss
 from utils.training_utils import get_warmup_cosine_scheduler
 from utils.vae_utils import sample_from_latent, save_target_visualization, visualize_reconstruction
 import yaml
 
-def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=0.001, lpips_weight=0.1, sinkhorn_eps=0.1, recon_weight=0.1):
+def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=0.001, sinkhorn_eps=0.1, recon_weight=0.1, l1_weight=0.1, ssim_weight=0.1):
     model.train()
     epoch_loss = 0
     epoch_recon_loss = 0
     epoch_kl_loss = 0
-    epoch_lpips_loss = 0
+    epoch_l1_loss = 0
+    epoch_ssim_loss = 0
     valid_batches = 0
-    
-    overfit = cfg.get("overfit", False)
 
     # Progress bar for the epoch
     pbar = tqdm(dataloader, desc=f"Epoch {epoch} | Eps: {sinkhorn_eps:.5f}", leave=False)
@@ -47,7 +46,7 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
 
         with my_context:
             # Forward pass - DETERMINISTIC for overfitting
-            x_recon, mu, logvar = model(x, use_sampling=True if not overfit else False)
+            x_recon, mu, logvar = model(x, use_sampling=True)
 
             # Compute VAE loss using Sinkhorn with annealing
             vae_loss, recon_loss, kl_loss = vae_loss_sinkhorn(
@@ -56,10 +55,12 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
                 kl_weight=kl_weight,
                 sinkhorn_epsilon=sinkhorn_eps
             )
+
+            # Compute visual losses
+            l1_loss_val, ssim_loss_val = gaussian_visual_loss(x, x_recon, device)
+
             
-            lpips_val = gaussian_lpips_loss(x, x_recon, device)
-            
-            total_loss = vae_loss + lpips_weight * lpips_val
+            total_loss = vae_loss + l1_weight * l1_loss_val + ssim_weight * ssim_loss_val
             
             # Backward pass with gradient accumulation
             loss_scaled = total_loss / cfg["grad_accumulation"]
@@ -82,15 +83,19 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
         epoch_loss += total_loss.item()
         epoch_recon_loss += recon_loss.item() * recon_weight
         epoch_kl_loss += kl_loss.item() * max_kl_weight
-        epoch_lpips_loss += lpips_val.item() * max_lpips_weight
+        epoch_l1_loss += l1_loss_val.item()
+        epoch_ssim_loss += ssim_loss_val.item()
         valid_batches += 1
         
         # Update progress bar
+        # Display weighted versions to see their impact on total loss
+        weighted_visual = l1_weight * l1_loss_val.item() + ssim_weight * ssim_loss_val.item()
+        
         pbar.set_postfix({
             'loss': f'{total_loss.item():.4f}',
             'recon': f'{recon_loss.item() * recon_weight:.4f}',
             'kl': f'{kl_loss.item() * max_kl_weight:.6f}',
-            'lpips': f'{lpips_val.item() * max_lpips_weight:.4f}',
+            'vis': f'{weighted_visual:.4f}',
             'eps': f'{sinkhorn_eps:.5f}'
         })
     
@@ -104,20 +109,22 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
     avg_loss = epoch_loss / valid_batches if valid_batches > 0 else float('inf')
     avg_recon = epoch_recon_loss / valid_batches if valid_batches > 0 else float('inf')
     avg_kl = epoch_kl_loss / valid_batches if valid_batches > 0 else float('inf')
-    avg_lpips = epoch_lpips_loss / valid_batches if valid_batches > 0 else float('inf')
+    avg_l1 = epoch_l1_loss / valid_batches if valid_batches > 0 else float('inf')
+    avg_ssim = epoch_ssim_loss / valid_batches if valid_batches > 0 else float('inf')
     
-    return avg_loss, avg_recon, avg_kl, avg_lpips
+    return avg_loss, avg_recon, avg_kl, avg_l1, avg_ssim
 
-def validate_one_epoch(model, dataloader, device, cfg, sinkhorn_eps=0.1, recon_weight=0.1, lpips_weight=0.1, kl_weight=0.001):
+def validate_one_epoch(model, dataloader, device, cfg, sinkhorn_eps=0.1, recon_weight=0.1, l1_weight=0.1, ssim_weight=0.1, kl_weight=0.001):
     model.eval()
     epoch_loss = 0
     epoch_recon_loss = 0
     epoch_kl_loss = 0
-    epoch_lpips_loss = 0
+    epoch_l1_loss = 0
+    epoch_ssim_loss = 0
     valid_batches = 0
     
+    # Added for consistency with train_one_epoch logging
     max_kl_weight = cfg["train"].get("max_kl_weight", 1.0)
-    max_lpips_weight = cfg["train"].get("lpips_weight", 0.1)
 
     with torch.no_grad():
         for batch in dataloader:
@@ -131,22 +138,23 @@ def validate_one_epoch(model, dataloader, device, cfg, sinkhorn_eps=0.1, recon_w
                 sinkhorn_epsilon=sinkhorn_eps
             )
             
-            lpips_val = gaussian_lpips_loss(x, x_recon, device)
-            total_loss = vae_loss + lpips_weight * lpips_val
+            l1_loss_val, ssim_loss_val = gaussian_visual_loss(x, x_recon, device)
+            total_loss = vae_loss + l1_weight * l1_loss_val + ssim_weight * ssim_loss_val
             
             epoch_loss += total_loss.item()
+            epoch_recon_loss += recon_loss.item() * recon_weight
             epoch_kl_loss += kl_loss.item() * max_kl_weight
-            epoch_lpips_loss += lpips_val.item() * max_lpips_weight
-            valid_batches += 1= lpips_val.item() * lpips_weight
+            epoch_l1_loss += l1_loss_val.item()
+            epoch_ssim_loss += ssim_loss_val.item()
             valid_batches += 1
             
     avg_loss = epoch_loss / valid_batches if valid_batches > 0 else float('inf')
     avg_recon = epoch_recon_loss / valid_batches if valid_batches > 0 else float('inf')
     avg_kl = epoch_kl_loss / valid_batches if valid_batches > 0 else float('inf')
-    avg_lpips = epoch_lpips_loss / valid_batches if valid_batches > 0 else float('inf')
+    avg_l1 = epoch_l1_loss / valid_batches if valid_batches > 0 else float('inf')
+    avg_ssim = epoch_ssim_loss / valid_batches if valid_batches > 0 else float('inf')
     
-    model.train()
-    return avg_loss, avg_recon, avg_kl, avg_lpips
+    return avg_loss, avg_recon, avg_kl, avg_l1, avg_ssim
 
 
 def train_vae():
@@ -179,7 +187,7 @@ def train_vae():
         cfg["data_dir"], 
         batch_size=cfg["batch_size"], 
         validation_split=cfg.get("validation_split", 0.05), # Default 5%
-        shuffle=True if not overfit else False, 
+        shuffle=True, 
         augment=cfg.get("augment", False),
         is_distributed=is_distributed
     )
@@ -201,7 +209,7 @@ def train_vae():
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model initialized: {total_params / 1e6:.2f}M Params")
 
-    optimizer = optim.AdamW(model.parameters(), lr=cfg["train"]["base_lr"], weight_decay=1e-4 if not overfit else 0.0)
+    optimizer = optim.AdamW(model.parameters(), lr=cfg["train"]["base_lr"], weight_decay=1e-4)
     
     lr_scheduler = get_warmup_cosine_scheduler(
         optimizer, 
@@ -213,68 +221,83 @@ def train_vae():
         wandb.init(project="gaussian-vae", config=cfg)
     best_val_loss = float('inf')
 
+    wandb.watch(model, log="all", log_freq=10)
+
     for epoch in range(1, cfg["train"]["max_epochs"] + 1):
         if is_distributed and train_sampler is not None:
             train_sampler.set_epoch(epoch)
         
         target_kl = cfg["train"].get("max_kl_weight", 1.0)
-        
         kl_warmup = cfg["train"].get("kl_warmup_epochs", 500)
-        
-        kl_weight = min(target_kl, target_kl * epoch / kl_warmup) if not overfit else 0.0
+        kl_weight = min(target_kl, target_kl * epoch / kl_warmup)
+
         sinkhorn_eps = max(0.001, 0.5 * ((1 - 1 / cfg["train"].get("sinkhorn_warmup_epochs", 200)) ** epoch)) 
         
         recon_weight = cfg["train"].get("recon_weight", 0.1)
 
-        lpips_weight = cfg["train"].get("lpips_weight", 0.1)
-        lpips_scale = min(1.0, epoch / cfg["train"].get("lpips_warmup_epochs", 200))
-        lpips_weight = lpips_weight * lpips_scale
+        target_l1 = cfg["train"].get("l1_weight", 0.1)
+        target_ssim = cfg["train"].get("ssim_weight", 0.1)
+        vis_warmup = cfg["train"].get("vis_warmup_epochs", 1000)
+
+        l1_weight = min(target_l1, target_l1 * epoch / vis_warmup)
+        ssim_weight = min(target_ssim, target_ssim * epoch / vis_warmup)
+
+        current_lr = optimizer.param_groups[0]['lr']
               
-        avg_loss, avg_recon, avg_kl, avg_lpips = train_one_epoch(
+        avg_loss, avg_recon, avg_kl, avg_l1, avg_ssim = train_one_epoch(
             model, train_loader, optimizer, device, epoch, cfg, 
             kl_weight=kl_weight, 
-            lpips_weight=lpips_weight,
             sinkhorn_eps=sinkhorn_eps,
-            recon_weight=recon_weight
-        )
-        current_lr = optimizer.param_groups[0]['lr']
-        
-        val_loss, val_recon, val_kl, val_lpips = validate_one_epoch(
-            model, val_loader, device, cfg, sinkhorn_eps=sinkhorn_eps,
-            kl_weight=kl_weight,
             recon_weight=recon_weight,
-            lpips_weight=lpips_weight
+            l1_weight=l1_weight,
+            ssim_weight=ssim_weight
         )
-    
+        
+        val_loss, val_recon, val_kl, val_l1, val_ssim = validate_one_epoch(
+            model, val_loader, device, cfg, 
+            sinkhorn_eps=0.1, # Use low epsilon for validation to see true performance
+            recon_weight=recon_weight,
+            l1_weight=l1_weight,
+            ssim_weight=ssim_weight,
+            kl_weight=kl_weight
+        )
+        
         if is_main_process:
-            raw_model: GaussianVAE = model.module if is_distributed else model # type: ignore
-
+            wandb.log({
+                "val/total_loss": val_loss,
+                "val/recon_loss": val_recon,
+                "val/kl_loss": val_kl,
+                "val/l1_loss": val_l1,
+                "val/ssim_loss": val_ssim,
+                "train/total_loss": avg_loss,
+                "train/recon_loss": avg_recon,
+                "train/kl_loss": avg_kl,
+                "train/l1_loss": avg_l1,
+                "train/ssim_loss": avg_ssim,
+                "train/lr": current_lr,
+                "train/kl_weight": kl_weight,
+                "train/l1_weight": l1_weight,
+                "train/ssim_weight": ssim_weight,
+                "train/sinkhorn_eps": sinkhorn_eps,
+                "epoch": epoch,
+            })
+            
+            # Save checkpoint if best validation loss
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                if epoch > 50:
-                    torch.save(raw_model.state_dict(), "best_gaussian_vae.pth")
-                    print(f"--> New best model saved (Val Loss: {best_val_loss:.4f})")
+                torch.save(model.state_dict(), f"{cfg['output_dir']}/best_gaussian_vae.pth")
+
+            # Save periodic checkpoint
+            if epoch % cfg["logging"].get("checkpoint_save_rate", 500) == 0:
+                 torch.save(model.state_dict(), f"{cfg['output_dir']}/checkpoint_epoch_{epoch}.pth")
             
-            # Log
-            wandb.log({
-                "epoch": epoch, 
-                "loss": avg_loss,
-                "recon_loss": avg_recon,
-                "kl_loss": avg_kl,
-                "lpips_loss": avg_lpips,
-                "val_loss": val_loss,
-                "val_recon_loss": val_recon,
-                "val_kl_loss": val_kl,
-                "val_lpips_loss": val_lpips,
-                "kl_weight": kl_weight,
-                "sinkhorn_eps": sinkhorn_eps,
-                "learning_rate": current_lr,
-                "best_val_loss": best_val_loss
-            })
             print(f"Epoch {epoch}/{cfg['train']['max_epochs']} | "
-                  f"Train Loss: {avg_loss:.4f} (Recon: {avg_recon:.4f}, KL: {avg_kl:.6f}, LPIPS: {avg_lpips:.4f}) | "
-                  f"Val Loss: {val_loss:.4f} (Recon: {val_recon:.4f}, KL: {val_kl:.6f}, LPIPS: {val_lpips:.4f}) | "
+                  f"Train Loss: {avg_loss:.4f} (Recon: {avg_recon:.4f}, KL: {avg_kl:.6f}, L1: {avg_l1:.4f}, SSIM: {avg_ssim:.4f}) | "
+                  f"Val Loss: {val_loss:.4f} (Recon: {val_recon:.4f}, KL: {val_kl:.6f}, L1: {val_l1:.4f}, SSIM: {val_ssim:.4f}) | "
                   f"LR: {current_lr:.6f}")
+
+            # Safe model access (handle both DDP and regular)
+            raw_model = model.module if hasattr(model, "module") else model # type: ignore
 
             if epoch % cfg["logging"]["sample_save_rate"] == 0:
                 sample_from_latent(raw_model, device, cfg, num_samples=5, epoch=epoch)
@@ -282,8 +305,6 @@ def train_vae():
             if epoch % cfg["logging"].get("reconstruct_save_rate", 100) == 0:
                 visualize_reconstruction(raw_model, val_loader, device, cfg, epoch=epoch)
 
-            if epoch % 500 == 0:
-                torch.save(raw_model.state_dict(), f"checkpoint_epoch_{epoch}.pth")
 
         lr_scheduler.step()
 
