@@ -93,7 +93,7 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
     avg_loss = epoch_loss / valid_batches if valid_batches > 0 else float('inf')
     avg_recon = epoch_recon_loss / valid_batches if valid_batches > 0 else float('inf')
     avg_kl = epoch_kl_loss / valid_batches if valid_batches > 0 else float('inf')
-    
+
     return avg_loss, avg_recon, avg_kl
 
 def validate_one_epoch(model, dataloader, device, cfg, sinkhorn_eps=0.1):
@@ -178,7 +178,12 @@ def main():
     
     # Save target visualization (using validation set for stable reference)
     if is_main_process:
-        save_target_visualization(val_loader, device, cfg)
+        # Skip if validation set is empty (e.g., when overfitting with validation_split=0.0)
+        if len(val_loader) > 0:
+            save_target_visualization(val_loader, device, cfg)
+        elif len(train_loader) > 0:
+            # Fall back to training loader if validation is empty
+            save_target_visualization(train_loader, device, cfg)
 
     # 2. Model
     model = GaussianVAE(
@@ -201,9 +206,18 @@ def main():
     # Custom Warmup Scheduler
     lr_scheduler = get_warmup_cosine_scheduler(
         optimizer, 
-        warmup_epochs=cfg["train"]["warmup_epochs"], 
-        max_epochs=cfg["train"]["max_epochs"]
+        lr_warmup_epochs=cfg["train"]["lr_warmup_epochs"], 
+        max_epochs=cfg["train"]["max_epochs"],
+        target_recon_weight=cfg["train"].get("target_recon_weight", 1.0)
     )
+
+    # Let's save the reconstruction from the initial model before training starts
+    if is_main_process:
+        raw_model: GaussianVAE = model.module if is_distributed else model # type: ignore
+        if len(val_loader) > 0:
+            visualize_reconstruction(raw_model, val_loader, device, cfg, epoch=0)
+        elif len(train_loader) > 0:
+            visualize_reconstruction(raw_model, train_loader, device, cfg, epoch=0)
 
     # 4. Logging
     if is_main_process:
@@ -215,10 +229,10 @@ def main():
         if is_distributed and train_sampler is not None:
             train_sampler.set_epoch(epoch)
         
-        # KL Annealing: gradually increase from 0 to target over first 500 epochs
-        target_kl = 1.0
-        warmup_epochs = 200
-        kl_weight = min(target_kl, target_kl * epoch / warmup_epochs) if not overfit else 0.0
+        target_kl = cfg["train"].get("target_kl_weight", 0.001)
+        kl_warmup_epochs = cfg["train"].get("kl_warmup_epochs", 500)
+        kl_weight = min(target_kl, target_kl * epoch / kl_warmup_epochs) if not cfg["overfit"] else 0.0
+
         sinkhorn_eps = max(0.001, 0.5 * (0.995 ** epoch)) 
               
         avg_loss, avg_recon, avg_kl = train_one_epoch(
@@ -226,10 +240,16 @@ def main():
         )
         current_lr = optimizer.param_groups[0]['lr']
         
-        # Validation Loop
-        val_loss, val_recon, val_kl = validate_one_epoch(
-            model, val_loader, device, cfg, sinkhorn_eps=sinkhorn_eps
-        )
+        # Validation Loop (skip if validation set is empty)
+        if len(val_loader) > 0:
+            val_loss, val_recon, val_kl = validate_one_epoch(
+                model, val_loader, device, cfg, sinkhorn_eps=sinkhorn_eps
+            )
+        else:
+            # No validation data - use placeholder values
+            val_loss = avg_loss
+            val_recon = avg_recon
+            val_kl = avg_kl
     
         if is_main_process:
             # Unwrap DDP to get the real model weights and methods
@@ -246,16 +266,17 @@ def main():
             # Log
             wandb.log({
                 "epoch": epoch, 
-                "loss": avg_loss,
-                "recon_loss": avg_recon,
-                "kl_loss": avg_kl,
-                "val_loss": val_loss,
-                "val_recon_loss": val_recon,
-                "val_kl_loss": val_kl,
+                "train/loss": avg_loss,
+                "train/recon_loss": avg_recon,
+                "train/kl_loss": avg_kl,
+                "validation/loss": val_loss,
+                "validation/recon_loss": val_recon,
+                "validation/kl_loss": val_kl,
                 "kl_weight": kl_weight,
                 "sinkhorn_eps": sinkhorn_eps,
                 "learning_rate": current_lr,
-                "best_val_loss": best_val_loss
+                "validation/best_val_loss": best_val_loss
+
             })
             print(f"Epoch {epoch}/{cfg['train']['max_epochs']} | "
                   f"Train Loss: {avg_loss:.4f} (Recon: {avg_recon:.4f}, KL: {avg_kl:.6f}) | "
@@ -269,7 +290,10 @@ def main():
 
             # Reconstruction
             if epoch % cfg["logging"].get("reconstruct_save_rate", 100) == 0:
-                visualize_reconstruction(raw_model, val_loader, device, cfg, epoch=epoch)
+                if len(val_loader) > 0:
+                    visualize_reconstruction(raw_model, val_loader, device, cfg, epoch=epoch)
+                elif len(train_loader) > 0:
+                    visualize_reconstruction(raw_model, train_loader, device, cfg, epoch=epoch)
 
             # Checkpointing every 500 epochs
             if epoch % 500 == 0:

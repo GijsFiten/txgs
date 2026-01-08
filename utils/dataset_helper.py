@@ -206,9 +206,6 @@ def create_train_val_dataloaders(data_dir, batch_size=32, validation_split=0.05,
     rng.shuffle(all_files)
     
     val_size = int(len(all_files) * validation_split)
-    # Ensure at least one validation file if dataset is large enough
-    if val_size == 0 and len(all_files) > 0:
-         val_size = 1
     
     # Check if dataset is empty
     if len(all_files) == 0:

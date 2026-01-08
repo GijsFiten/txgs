@@ -3,6 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from utils.pointnet_utils import PointNetSetAbstraction, PointNetSetAbstractionMsg, PointNetFeaturePropagation
 from scipy.optimize import linear_sum_assignment
+from utils.diffusion_data_helper import denormalize_data
+
+from utils.image_utils import render
+from fused_ssim import fused_ssim
 
 
 # This is a VAE model which takes in 2D Gaussian splats and encodes them into a latent space
@@ -238,8 +242,8 @@ def vae_loss_sinkhorn(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001,
     P = sinkhorn_matching(cost_matrix, epsilon=sinkhorn_epsilon, max_iter=50) # [B, N, N]
     
     # 3. Compute Transport Cost (Sinkhorn Loss)
-    # Sum over N, N, average over B
-    recon_loss = torch.sum(P * cost_matrix) / B
+    # Sum over N, N, average over B times number of gaussians to normalize
+    recon_loss = torch.sum(P * cost_matrix) / (B * x.shape[1])
 
     
     # KL Divergence

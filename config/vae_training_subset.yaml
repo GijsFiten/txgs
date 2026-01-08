@@ -1,9 +1,9 @@
-data_dir: "./data/FFHQ/"
-output_dir: "./output/FFHQ/"
-batch_size: 96
+data_dir: "./data/FFHQ_testingsubset/"
+output_dir: "./output/FFHQ_testingsubset/"
+batch_size: 10
 grad_accumulation: 1
-overfit: false
-validation_split: 0.05
+overfit: true
+validation_split: 0.0
 
 model:
   num_gaussians: 1000
@@ -18,12 +18,12 @@ train:
 
   target_recon_weight: 1.0
 
-  target_kl_weight: 0.01
+  target_kl_weight: 0.001
   kl_warmup_epochs: 200
 
-  sinkhorn_warmup_epochs: 400
+  sinkhorn_warmup_epochs: 200
   clip_norm: 2.5
 
 logging:
   sample_save_rate: 200
-  reconstruct_save_rate: 100
+  reconstruct_save_rate: 10
