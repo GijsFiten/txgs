@@ -1,26 +1,6 @@
 import torch
 import math
 
-def normalize_data(xy, scale, rot, feat):
-    xy_norm = (xy - 0.5) / 0.2
-    # Clamp scale to prevent log of non-positive numbers
-    scale_clamped = torch.clamp(scale, min=1e-6)
-    scale_norm = (torch.log(scale_clamped) - 3) / 2
-    rot_norm = rot * 2.0
-    # Clamp feat to prevent extreme values
-    feat_clamped = torch.clamp(feat, min=0.0, max=1.0)
-    feat_norm = (feat_clamped * 2.0) - 1.0
-    return xy_norm, scale_norm, rot_norm, feat_norm
-
-def denormalize_data(xy_norm, scale_norm, rot_norm, feat_norm):
-    xy = xy_norm * 0.2 + 0.5
-    scale = torch.exp(scale_norm * 2 + 3)
-    rot = rot_norm / 2.0
-    feat = (feat_norm + 1.0) / 2.0
-    feat = torch.clamp(feat, 0.0, 1.0)
-    return xy, scale, rot, feat
-
-
 class DiffusionScheduler:
     def __init__(self, num_timesteps=1000, beta_start=0.0001, beta_end=0.02, schedule="cosine"):
         self.num_timesteps = num_timesteps

@@ -4,8 +4,6 @@ from torch.utils.data.distributed import DistributedSampler
 import numpy as np
 import glob
 import os
-
-from .diffusion_data_helper import normalize_data
 from .gaussian_file_helper import load_gaussians
 
 class GaussianSplatDataset(Dataset):
@@ -62,18 +60,16 @@ class GaussianSplatDataset(Dataset):
             # Apply augmentation BEFORE normalization
             if self.augment:
                 xy, scale, rot, feat = self.augment_gaussians(xy, scale, rot, feat)
-            
-            # Normalize the data
-            xy_n, scale_n, rot_n, feat_n = normalize_data(xy, scale, rot, feat)
+    
             
             # Sort by scale norm
-            scale_norms = torch.norm(scale_n, dim=1)
+            scale_norms = torch.norm(scale, dim=1)
             sorted_indices = torch.argsort(scale_norms, descending=True)
             
-            xy_n = xy_n[sorted_indices]
-            scale_n = scale_n[sorted_indices]
-            rot_n = rot_n[sorted_indices]
-            feat_n = feat_n[sorted_indices]
+            xy_n = xy[sorted_indices]
+            scale_n = scale[sorted_indices]
+            rot_n = rot[sorted_indices]
+            feat_n = feat[sorted_indices]
             
             # Check for NaN after normalization
             if torch.isnan(xy_n).any() or torch.isnan(scale_n).any() or torch.isnan(rot_n).any() or torch.isnan(feat_n).any():

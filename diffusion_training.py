@@ -7,7 +7,7 @@ import os
 from tqdm import tqdm  # Recommended for progress bars
 
 from utils.dataset_helper import create_dataloaders
-from utils.diffusion_data_helper import DiffusionScheduler, denormalize_data
+from utils.diffusion_data_helper import DiffusionScheduler
 from diffusion_model import GaussianDiffusionTransformer
 from utils.image_utils import render_and_save
 
@@ -95,9 +95,7 @@ def sample_and_render(model, scheduler, device, num_samples=5, epoch=None):
         for i in range(num_samples):
             sample = x[i]
             # Denormalize
-            xy, scale, rot, feat = denormalize_data(
-                sample[:, 0:2], sample[:, 2:4], sample[:, 4:5], sample[:, 5:8]
-            )
+            xy, scale, rot, feat = sample[:, 0:2], sample[:, 2:4], sample[:, 4:5], sample[:, 5:8]
             
             # Ensure all tensors are float32 and contiguous
             xy = xy.contiguous().float()

@@ -1,7 +1,7 @@
 data_dir: "./data/FFHQ_testingsubset/"
 output_dir: "./output/FFHQ_testingsubset/"
-batch_size: 6
-grad_accumulation: 2
+batch_size: 1
+grad_accumulation: 1
 
 model:
   num_gaussians: 1000

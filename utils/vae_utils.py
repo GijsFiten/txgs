@@ -1,6 +1,5 @@
 import os
 import torch
-from utils.diffusion_data_helper import denormalize_data
 from utils.image_utils import render_and_save
 
 def sample_from_latent(model, device, cfg, num_samples=5, epoch=None):
@@ -20,9 +19,7 @@ def sample_from_latent(model, device, cfg, num_samples=5, epoch=None):
             sample = x_sampled[i]
             
             # Denormalize
-            xy, scale, rot, feat = denormalize_data(
-                sample[:, 0:2], sample[:, 2:4], sample[:, 4:5], sample[:, 5:8]
-            )
+            xy, scale, rot, feat = sample[:, 0:2], sample[:, 2:4], sample[:, 4:5], sample[:, 5:8]
             
             xy = xy.contiguous().float()
             scale = scale.contiguous().float()
@@ -55,9 +52,7 @@ def visualize_reconstruction(model, dataloader, device, cfg, epoch=None):
         sample = x_recon[0]
         
         # Denormalize
-        xy, scale, rot, feat = denormalize_data(
-            sample[:, 0:2], sample[:, 2:4], sample[:, 4:5], sample[:, 5:8]
-        )
+        xy, scale, rot, feat = sample[:, 0:2], sample[:, 2:4], sample[:, 4:5], sample[:, 5:8]
         
         xy = xy.contiguous().float()
         scale = scale.contiguous().float()
@@ -86,9 +81,7 @@ def save_target_visualization(dataloader, device, cfg):
     print(f"\n[Rendering] Saving target ground truth...")
     
     # Denormalize
-    xy, scale, rot, feat = denormalize_data(
-        target[:, 0:2], target[:, 2:4], target[:, 4:5], target[:, 5:8]
-    )
+    xy, scale, rot, feat = target[:, 0:2], target[:, 2:4], target[:, 4:5], target[:, 5:8]
     
     xy = xy.contiguous().float()
     scale = scale.contiguous().float()

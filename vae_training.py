@@ -57,9 +57,9 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
             )
 
             # Compute visual losses
-            l1_loss_val, ssim_loss_val = gaussian_visual_loss(x, x_recon, device)
+            # l1_loss_val, ssim_loss_val = gaussian_visual_loss(x, x_recon, device)
+            l1_loss_val, ssim_loss_val = torch.Tensor([0.0]).to(device), torch.Tensor([0.0]).to(device)   
 
-            
             total_loss = vae_loss + l1_weight * l1_loss_val + ssim_weight * ssim_loss_val
             
             # Backward pass with gradient accumulation
@@ -222,6 +222,11 @@ def train_vae():
     best_val_loss = float('inf')
 
     wandb.watch(model, log="all", log_freq=10)
+
+    #Save the recons of the initial untrained model
+    if is_main_process:
+        raw_model: GaussianVAE = model.module if is_distributed else model # type: ignore
+        visualize_reconstruction(raw_model, val_loader, device, cfg, epoch=0)
 
     for epoch in range(1, cfg["train"]["max_epochs"] + 1):
         if is_distributed and train_sampler is not None:

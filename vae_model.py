@@ -5,7 +5,6 @@ from utils.pointnet_utils import PointNetSetAbstraction, PointNetSetAbstractionM
 from scipy.optimize import linear_sum_assignment
 import lpips
 from fused_ssim import fused_ssim
-from utils.diffusion_data_helper import denormalize_data
 from utils.image_utils import render
 
 # This is a VAE model which takes in 2D Gaussian splats and encodes them into a latent space
@@ -319,12 +318,8 @@ def gaussian_lpips_loss(x_source, x_recon, device):
     # and also denormalize them because render expects world coordinates (or [0,1] for image coords)
     
     # Slice features: xy (0-2), scale (2-4), rot (4-5), feat (5-8)
-    src_xy, src_scale, src_rot, src_feat = denormalize_data(
-        x_source[..., 0:2], x_source[..., 2:4], x_source[..., 4:5], x_source[..., 5:8]
-    )
-    rec_xy, rec_scale, rec_rot, rec_feat = denormalize_data(
-        x_recon[..., 0:2], x_recon[..., 2:4], x_recon[..., 4:5], x_recon[..., 5:8]
-    )
+    src_xy, src_scale, src_rot, src_feat = x_source[..., 0:2], x_source[..., 2:4], x_source[..., 4:5], x_source[..., 5:8]
+    rec_xy, rec_scale, rec_rot, rec_feat = x_recon[..., 0:2], x_recon[..., 2:4], x_recon[..., 4:5], x_recon[..., 5:8]
 
     rendered_src = []
     rendered_rec = []
@@ -370,12 +365,8 @@ def gaussian_visual_loss(x_source, x_recon, device):
     batch_size = x_source.shape[0]
     
     # ... (Descaling code same as before) ... 
-    src_xy, src_scale, src_rot, src_feat = denormalize_data(
-        x_source[..., 0:2], x_source[..., 2:4], x_source[..., 4:5], x_source[..., 5:8]
-    )
-    rec_xy, rec_scale, rec_rot, rec_feat = denormalize_data(
-        x_recon[..., 0:2], x_recon[..., 2:4], x_recon[..., 4:5], x_recon[..., 5:8]
-    )
+    src_xy, src_scale, src_rot, src_feat = x_source[..., 0:2], x_source[..., 2:4], x_source[..., 4:5], x_source[..., 5:8]
+    rec_xy, rec_scale, rec_rot, rec_feat = x_recon[..., 0:2], x_recon[..., 2:4], x_recon[..., 4:5], x_recon[..., 5:8]
     
     # ... (Rendering loop same as before) ...
     rendered_src = []
