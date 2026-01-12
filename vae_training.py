@@ -190,6 +190,8 @@ def main():
         num_gaussians=cfg["model"]["num_gaussians"],
         input_dim=cfg["model"]["input_dim"],
         latent_dim=cfg["model"]["model_dim"],
+        decoder_layers=cfg["model"].get("decoder_transformer_layers", 6),
+        decoder_heads=cfg["model"].get("decoder_transformer_heads", 8)
     ).to(device)
 
     if is_distributed:

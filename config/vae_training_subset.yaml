@@ -1,14 +1,16 @@
 data_dir: "./data/FFHQ_testingsubset/"
 output_dir: "./output/FFHQ_testingsubset/"
-batch_size: 10
+batch_size: 16
 grad_accumulation: 1
 overfit: false
-validation_split: 0.0
+validation_split: 0.05
 
 model:
   num_gaussians: 1000
   input_dim: 8
-  model_dim: 512
+  model_dim: 256
+  decoder_transformer_layers: 12
+  decoder_transformer_heads: 8
 
 train:
   max_epochs: 2000
@@ -19,12 +21,13 @@ train:
   target_recon_weight: 1.0
 
   target_kl_weight: 0.0001
-  kl_disabled_epochs: 100
-  kl_warmup_epochs: 800
+  kl_disabled_epochs: 200
+  kl_warmup_epochs: 1000
 
-  sinkhorn_warmup_epochs: 200
+  sinkhorn_warmup_epochs: 250
   clip_norm: 2.5
 
 logging:
   sample_save_rate: 200
-  reconstruct_save_rate: 10
+  reconstruct_save_rate: 100
+  model_save_rate: 500

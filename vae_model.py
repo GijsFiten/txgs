@@ -21,7 +21,7 @@ from fused_ssim import fused_ssim
 # latent space smooth and continuous
 
 class GaussianTransformerDecoder(nn.Module):
-    def __init__(self, num_gaussians, latent_dim, output_dim=8, nhead=8, num_layers=4):
+    def __init__(self, num_gaussians, latent_dim, output_dim=8, nhead=8, num_layers=6):
         super().__init__()
         self.num_gaussians = num_gaussians
         self.d_model = latent_dim  # Directly use latent dimension
@@ -84,7 +84,7 @@ class GaussianTransformerDecoder(nn.Module):
         return torch.cat([xy, scale, rot, color], dim=-1)
 
 class GaussianVAE(nn.Module):
-    def __init__(self, num_gaussians=1000, input_dim=8, latent_dim=768):
+    def __init__(self, num_gaussians=1000, input_dim=8, latent_dim=256, decoder_layers=6, decoder_heads=8):
         super(GaussianVAE, self).__init__()
         self.num_gaussians = num_gaussians
         self.input_dim = input_dim
@@ -114,8 +114,8 @@ class GaussianVAE(nn.Module):
             num_gaussians=num_gaussians,
             latent_dim=latent_dim, # Passes 768 directly
             output_dim=input_dim,
-            nhead=8,     # 768 is divisible by 8 (96 dim per head)
-            num_layers=4 
+            nhead=decoder_heads,     # 768 is divisible by 8 (96 dim per head)
+            num_layers=decoder_layers 
         )
         
     def encode(self, x):

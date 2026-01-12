@@ -1,14 +1,16 @@
 data_dir: "./data/FFHQ/"
 output_dir: "./output/FFHQ/"
 batch_size: 96
-grad_accumulation: 1
+grad_accumulation: 2
 overfit: false
 validation_split: 0.05
 
 model:
   num_gaussians: 1000
   input_dim: 8
-  model_dim: 512
+  model_dim: 256
+  decoder_transformer_layers: 12
+  decoder_transformer_heads: 8
 
 train:
   max_epochs: 2000
@@ -20,9 +22,9 @@ train:
 
   target_kl_weight: 0.0001
   kl_disabled_epochs: 200
-  kl_warmup_epochs: 1000
+  kl_warmup_epochs: 800
 
-  sinkhorn_warmup_epochs: 400
+  sinkhorn_warmup_epochs: 250
   clip_norm: 2.5
 
 logging:
