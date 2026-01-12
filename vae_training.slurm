@@ -3,12 +3,12 @@
 #SBATCH --account=lp_emediaxr
 #SBATCH --time=24:00:00
 #SBATCH --clusters=wice
-#SBATCH --partition=gpu_h100
+#SBATCH --partition=gpu_a100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --gpus-per-node=4
-#SBATCH --mem=128G
+#SBATCH --mem=32G
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 
