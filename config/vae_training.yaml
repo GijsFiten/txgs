@@ -1,6 +1,6 @@
 data_dir: "./data/FFHQ/"
 output_dir: "./output/FFHQ/"
-batch_size: 96
+batch_size: 64
 grad_accumulation: 2
 overfit: false
 validation_split: 0.05
