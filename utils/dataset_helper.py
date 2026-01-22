@@ -192,7 +192,6 @@ def create_dataloaders(data_dir, batch_size=32, num_points=1000, shuffle=True, a
         drop_last=False
     )
     
-    # 3. Return the sampler too! You need it for set_epoch() in the training loop.
     return dataloader, sampler
 
 
