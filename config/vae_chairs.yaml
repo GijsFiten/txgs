@@ -1,0 +1,33 @@
+data_dir: "./data/chairs_10k/"
+output_dir: "./output/chairs_10k/"
+batch_size: 1
+grad_accumulation: 8
+overfit: false
+validation_split: 0.05
+
+model:
+  num_gaussians: 10000
+  input_dim: 8
+  model_dim: 256
+  decoder_transformer_layers: 6
+  decoder_transformer_heads: 8
+
+train:
+  max_epochs: 2000
+
+  base_lr: 0.0005      # 5e-5
+  lr_warmup_epochs: 100
+
+  target_recon_weight: 1.0
+
+  target_kl_weight: 0.0001
+  kl_disabled_epochs: 200
+  kl_warmup_epochs: 800
+
+  sinkhorn_warmup_epochs: 250
+  clip_norm: 2.5
+
+logging:
+  sample_save_rate: 200
+  reconstruct_save_rate: 100
+  model_save_rate: 500

@@ -217,12 +217,7 @@ __marimo__/
 
 .conda/
 backup
-data/large/*
-data/small/*
-data/chairs_1k/*
-data/chairs_1k_overfit/*
-data/FFHQ/*
-data/FFHQ_testingsubset/*
+data/*
 
 gsplat/
 output/
