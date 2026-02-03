@@ -1,12 +1,12 @@
-data_dir: "./data/chairs_10k/"
-output_dir: "./output/chairs_10k/"
-batch_size: 1
-grad_accumulation: 8
+data_dir: "./data/chairs_5k/"
+output_dir: "./output/chairs_5k/"
+batch_size: 4
+grad_accumulation: 4
 overfit: false
 validation_split: 0.05
 
 model:
-  num_gaussians: 10000
+  num_gaussians: 5000
   input_dim: 8
   model_dim: 256
   decoder_transformer_layers: 6

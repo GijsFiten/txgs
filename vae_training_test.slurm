@@ -22,5 +22,4 @@ nvcc -V
 
 # 4 GPUs on a single node: optimize threads
 export OMP_NUM_THREADS=8
-
-srun torchrun --standalone --nproc_per_node=1 ./vae_training.py --config config/vae_training.yaml
+torchrun --standalone --nproc_per_node=1 ./vae_training.py --config config/vae_chairs.yaml
