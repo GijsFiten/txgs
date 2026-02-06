@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=gaussian_vae_ffhq_ddu
 #SBATCH --account=lp_emediaxr
-#SBATCH --time=00:10:00
+#SBATCH --time=00:30:00
 #SBATCH --clusters=wice
 #SBATCH --partition=gpu_a100_debug
 #SBATCH --nodes=1
