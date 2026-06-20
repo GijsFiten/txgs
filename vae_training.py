@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -16,7 +18,7 @@ from utils.training_utils import get_warmup_cosine_scheduler
 from utils.vae_utils import sample_from_latent, save_target_visualization, visualize_reconstruction
 import yaml
 
-def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=0.001, sinkhorn_eps=0.1):
+def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_scheduler, global_step, total_steps):
     model.train()
     epoch_loss = 0
     epoch_recon_loss = 0
@@ -24,50 +26,74 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
     valid_batches = 0
     
     overfit = cfg.get("overfit", False)
+    
+    # Pull step configurations
+    steps_per_epoch = len(dataloader)
+    kl_disabled_steps = cfg["train"].get("kl_disabled_epochs", 0) * steps_per_epoch
+    kl_warmup_steps = cfg["train"].get("kl_warmup_epochs", 500) * steps_per_epoch
+    target_kl = cfg["train"].get("target_kl_weight", 0.001)
+
+    progress = global_step / max(1, total_steps)
+    sinkhorn_eps = max(0.001, 0.5 * math.exp(-5.0 * progress))
+    
+    sinkhorn_iters = int(10 + 40 * min(1.0, progress * 2.0))
 
     # Progress bar for the epoch
-    pbar = tqdm(dataloader, desc=f"Epoch {epoch} | Eps: {sinkhorn_eps:.5f}", leave=False)
+    pbar = tqdm(dataloader, desc=f"Epoch {epoch}", leave=False)
     
     for batch_idx, batch in enumerate(pbar):
-        # Move data to device
-        x = batch.to(device)  # [B, N, 8]
+        global_step += 1
         
-        # Determine if we should sync gradients (only on the step where optimizer.step() runs)
-        # We sync on the LAST sub-step of the accumulation.
-        # If grad_accumulation is 1, we always sync.
+        # 1. Dynamic KL Weight Calculation
+        if overfit or global_step <= kl_disabled_steps:
+            kl_weight = 0.0
+        else:
+            warmup_progress = (global_step - kl_disabled_steps) / max(1, kl_warmup_steps)
+            kl_weight = min(target_kl, target_kl * warmup_progress)
+
+        # 2. Dynamic Sinkhorn Epsilon Calculation (Exponential decay based on training progress)
+        progress = global_step / max(1, total_steps)
+        # Decays from 0.5 smoothly down to ~0.003 by the end of training
+        sinkhorn_eps = max(0.001, 0.5 * math.exp(-5.0 * progress))
+        
+        x = batch.to(device)
+
         should_sync = ((batch_idx + 1) % cfg["grad_accumulation"] == 0)
-        
-        # Use no_sync() context if we are NOT syncing (and if model is DDP)
-        # If the model is not DDP, no_sync is not available, but nullcontext handles it if we structured perfectly.
-        # However, DDP wrapper adds no_sync. If not distributed, model is raw.
-        # We need to be careful.
-        
         my_context = model.no_sync() if (isinstance(model, DDP) and not should_sync) else nullcontext()
 
         with my_context:
-            # Forward pass - DETERMINISTIC for overfitting
-            x_recon, mu, logvar = model(x, use_sampling=True if not overfit else False)
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                x_recon, mu, logvar = model(x, use_sampling=True if not overfit else False)
 
-            # Compute VAE loss using Sinkhorn with annealing
-            loss, recon_loss, kl_loss = vae_loss_sinkhorn(
-                x_recon, x, mu, logvar, 
-                recon_weight=1.0, 
-                kl_weight=kl_weight,
-                sinkhorn_epsilon=sinkhorn_eps
-            )
+                loss, recon_loss, kl_loss = vae_loss_sinkhorn(
+                    x_recon, x, mu, logvar, 
+                    recon_weight=1.0, 
+                    kl_weight=kl_weight,
+                    sinkhorn_epsilon=sinkhorn_eps,
+                    sinkhorn_iters=sinkhorn_iters
+                )
+                
+                loss = loss / cfg["grad_accumulation"]
             
-            # Backward pass with gradient accumulation
-            loss = loss / cfg["grad_accumulation"]
+            # The backward pass sits OUTSIDE the autocast block!
             loss.backward()
         
         # Gradient accumulation step
         if should_sync:
-            # Clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["train"]["clip_norm"])
-            
-            # Optimizer step
             optimizer.step()
+            lr_scheduler.step()
             optimizer.zero_grad()
+            
+            # Log step-level metrics if main process
+            if not dist.is_initialized() or dist.get_rank() == 0:
+                wandb.log({
+                    "train/step_loss": loss.item() * cfg["grad_accumulation"],
+                    "step_kl_weight": kl_weight,
+                    "step_sinkhorn_eps": sinkhorn_eps,
+                    "step_learning_rate": optimizer.param_groups[0]['lr'],
+                    "global_step": global_step
+                })
         
         # Accumulate losses
         epoch_loss += loss.item() * cfg["grad_accumulation"]
@@ -87,6 +113,7 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
     if valid_batches % cfg["grad_accumulation"] != 0:
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["train"]["clip_norm"])
         optimizer.step()
+        lr_scheduler.step()
         optimizer.zero_grad()
     
     # Return average losses
@@ -94,7 +121,7 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, kl_weight=
     avg_recon = epoch_recon_loss / valid_batches if valid_batches > 0 else float('inf')
     avg_kl = epoch_kl_loss / valid_batches if valid_batches > 0 else float('inf')
 
-    return avg_loss, avg_recon, avg_kl
+    return avg_loss, avg_recon, avg_kl, global_step
 
 def validate_one_epoch(model, dataloader, device, cfg, sinkhorn_eps=0.1):
     model.eval()
@@ -205,13 +232,21 @@ def main():
     # 3. Optimization Components
     optimizer = optim.AdamW(model.parameters(), lr=cfg["train"]["base_lr"], weight_decay=1e-4 if not overfit else 0.0)  # No weight decay for overfitting
     
-    # Custom Warmup Scheduler
+    # Calculate step equivalents
+    steps_per_epoch = len(train_loader)
+    total_steps = cfg["train"]["max_epochs"] * steps_per_epoch
+    warmup_steps = cfg["train"]["lr_warmup_epochs"] * steps_per_epoch
+    
+    # Custom Warmup Scheduler (Now operating on STEPS)
     lr_scheduler = get_warmup_cosine_scheduler(
         optimizer, 
-        lr_warmup_epochs=cfg["train"]["lr_warmup_epochs"], 
-        max_epochs=cfg["train"]["max_epochs"],
+        lr_warmup_epochs=warmup_steps, 
+        max_epochs=total_steps,
         target_recon_weight=cfg["train"].get("target_recon_weight", 1.0)
     )
+
+    # Initialize global step tracker
+    global_step = 0
 
     # Let's save the reconstruction from the initial model before training starts
     if is_main_process:
@@ -246,8 +281,8 @@ def main():
 
         sinkhorn_eps = max(0.001, 0.5 * (0.995 ** epoch)) 
               
-        avg_loss, avg_recon, avg_kl = train_one_epoch(
-            model, train_loader, optimizer, device, epoch, cfg, kl_weight=kl_weight, sinkhorn_eps=sinkhorn_eps
+        avg_loss, avg_recon, avg_kl, global_step = train_one_epoch(
+            model, train_loader, optimizer, device, epoch, cfg, lr_scheduler, global_step, total_steps
         )
         current_lr = optimizer.param_groups[0]['lr']
         
@@ -309,9 +344,6 @@ def main():
             # Checkpointing every 500 epochs
             if epoch % cfg["logging"].get("model_save_rate", 500) == 0:
                 torch.save(raw_model.state_dict(), f"checkpoint_epoch_{epoch}.pth")
-
-        # Step the scheduler
-        lr_scheduler.step()
 
     # Final Wrap up
     if is_main_process:

@@ -1,14 +1,14 @@
 data_dir: "./data/FFHQ_testingsubset/"
 output_dir: "./output/FFHQ_testingsubset/"
-batch_size: 16
+batch_size: 1
 grad_accumulation: 1
 overfit: false
 validation_split: 0.05
 
 model:
-  num_gaussians: 1000
+  num_gaussians: 5000
   input_dim: 8
-  model_dim: 256
+  model_dim: 1024
   decoder_transformer_layers: 12
   decoder_transformer_heads: 8
 
@@ -28,6 +28,6 @@ train:
   clip_norm: 2.5
 
 logging:
-  sample_save_rate: 200
-  reconstruct_save_rate: 100
-  model_save_rate: 500
+  sample_save_rate: 25
+  reconstruct_save_rate: 1
+  model_save_rate: 2000

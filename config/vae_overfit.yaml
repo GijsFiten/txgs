@@ -1,20 +1,33 @@
-data_dir: "./data/overfit/"
+data_dir: "./data/FFHQ_overfit/"
 output_dir: "./output/"
 batch_size: 1
 grad_accumulation: 1
+overfit: true
+
 
 model:
-  num_gaussians: 1000
+  num_gaussians: 5000
   input_dim: 8
-  model_dim: 512
+  model_dim: 1024
+  decoder_transformer_layers: 12
+  decoder_transformer_heads: 8
 
 train:
   max_epochs: 2000
-  base_lr: 0.00025      # 25e-5
-  warmup_epochs: 30
-  sinkhorn_warmup_epochs: 50
+
+  base_lr: 0.00005      # 5e-5
+  lr_warmup_epochs: 100
+
+  target_recon_weight: 1.0
+
+  target_kl_weight: 0.000
+  kl_disabled_epochs: 200
+  kl_warmup_epochs: 1000
+
+  sinkhorn_warmup_epochs: 250
   clip_norm: 2.5
 
 logging:
-  sample_save_rate: 1000000
-  reconstruct_save_rate: 25
+  sample_save_rate: 1000
+  reconstruct_save_rate: 5
+  model_save_rate: 2000

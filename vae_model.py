@@ -21,65 +21,46 @@ from fused_ssim import fused_ssim
 # latent space smooth and continuous
 
 class GaussianTransformerDecoder(nn.Module):
-    def __init__(self, num_gaussians, latent_dim, output_dim=8, nhead=8, num_layers=6):
+    def __init__(self, num_gaussians, latent_dim, output_dim=8, nhead=8, num_layers=4): # Reduced to 4 layers
         super().__init__()
         self.num_gaussians = num_gaussians
-        self.d_model = latent_dim  # Directly use latent dimension
+        self.d_model = latent_dim
         
-        # 1. Learnable "Query" Embeddings
-        # These are the "empty slots" that will become your Gaussians.
-        # Shape: [1, N, d_model]
-        self.query_embeddings = nn.Parameter(torch.randn(1, num_gaussians, self.d_model))
+        # 1. Scale down initialization so softmax doesn't immediately saturate
+        self.query_pos = nn.Parameter(torch.randn(1, num_gaussians, self.d_model) * 0.02)
         
-        # 2. Standard Transformer Decoder
-        # This architecture inherently supports Cross-Attention.
-        # Queries (tgt) attend to Latent (memory).
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=self.d_model, 
-            nhead=nhead, 
-            dim_feedforward=self.d_model * 4, 
-            dropout=0.1, 
-            activation="gelu",
-            batch_first=True,
-            norm_first=True  # Pre-LN is crucial for convergence
-        )
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
+        # 2. Use a ModuleList so we can manually inject the positional embeddings
+        self.layers = nn.ModuleList([
+            nn.TransformerDecoderLayer(
+                d_model=self.d_model, nhead=nhead, 
+                dim_feedforward=self.d_model * 4, 
+                dropout=0.0,  # Turn off dropout for pure geometry generation
+                activation="gelu", batch_first=True, norm_first=True
+            ) for _ in range(num_layers)
+        ])
         
-        # 3. Output Heads
         self.head_xy = nn.Linear(self.d_model, 2)
         self.head_scale = nn.Linear(self.d_model, 2)
         self.head_rot = nn.Linear(self.d_model, 1)
         self.head_color = nn.Linear(self.d_model, 3)
 
     def forward(self, z):
-        """
-        Args:
-            z: Latent vector [B, latent_dim]
-        Returns:
-            x: Gaussian parameters [B, N, 8]
-        """
         B = z.shape[0]
         
-        # A. Prepare Queries (Target)
-        # These represent "Gaussian ID 0" to "Gaussian ID N"
-        tgt = self.query_embeddings.expand(B, -1, -1) # [B, N, d_model]
-        
-        # B. Prepare Memory (Latent)
-        # We treat the single latent vector as a sequence of length 1.
-        # The decoder will Cross-Attend to this.
+        # 3. The Sequence starts as zeros. 
+        tgt = torch.zeros(B, self.num_gaussians, self.d_model, device=z.device)
         memory = z.unsqueeze(1) # [B, 1, d_model]
+        pos = self.query_pos.expand(B, -1, -1)
         
-        # C. Run Transformer Decoder
-        # The magic happens here: 
-        # 1. Self-Attention: Queries arrange themselves spatially.
-        # 2. Cross-Attention: Queries look at 'memory' (z) to get shape info.
-        x = self.decoder(tgt, memory)
+        # 4. Inject unique identities at EVERY layer to break the symmetry trap
+        for layer in self.layers:
+            tgt = tgt + pos
+            tgt = layer(tgt, memory)
         
-        # D. Project to features
-        xy = self.head_xy(x)
-        scale = self.head_scale(x)
-        rot = self.head_rot(x)
-        color = self.head_color(x)
+        xy = self.head_xy(tgt)
+        scale = self.head_scale(tgt)
+        rot = self.head_rot(tgt)
+        color = self.head_color(tgt)
         
         return torch.cat([xy, scale, rot, color], dim=-1)
 
@@ -119,18 +100,23 @@ class GaussianVAE(nn.Module):
         )
         
     def encode(self, x):
-        B, N, C = x.shape
-        xy = x[:, :, :2].permute(0, 2, 1)
-        features = x[:, :, 2:].permute(0, 2, 1)
-        
-        l1_xyz, l1_points = self.sa1(xy, features)
-        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
-        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
-        
-        global_feature = l3_points.view(B, -1)
-        mu = self.fc_mu(global_feature)
-        logvar = self.fc_logvar(global_feature)
-        return mu, logvar
+        # SUSPEND autocast for PointNet geometry operations to prevent index corruption
+        with torch.autocast("cuda", enabled=False):
+            # Force input back to float32 just in case
+            x = x.float() 
+            
+            B, N, C = x.shape
+            xy = x[:, :, :2].permute(0, 2, 1)
+            features = x[:, :, 2:].permute(0, 2, 1)
+            
+            l1_xyz, l1_points = self.sa1(xy, features)
+            l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
+            l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
+            
+            global_feature = l3_points.view(B, -1)
+            mu = self.fc_mu(global_feature)
+            logvar = self.fc_logvar(global_feature)
+            return mu, logvar
     
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
@@ -208,7 +194,7 @@ def vae_loss(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001):
     
     return total_loss, recon_loss, kl_loss
 
-def vae_loss_sinkhorn(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001, sinkhorn_epsilon=0.01):
+def vae_loss_sinkhorn(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001, sinkhorn_epsilon=0.01, sinkhorn_iters=50):
     B, N, C = x.shape
     
     # 1. Compute Cost Matrix on ALL features (weighted)
@@ -237,13 +223,22 @@ def vae_loss_sinkhorn(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001,
     
     # Weighted total cost
     cost_matrix = 10.0 * cost_xy + 1.0 * cost_scale + 0.5 * cost_rot + 0.5 * cost_color
-    
-    # 2. Compute Soft Permutation Matrix (P) using Sinkhorn
-    P = sinkhorn_matching(cost_matrix, epsilon=sinkhorn_epsilon, max_iter=50) # [B, N, N]
-    
-    # 3. Compute Transport Cost (Sinkhorn Loss)
-    # Sum over N, N, average over B times number of gaussians to normalize
-    recon_loss = torch.sum(P * cost_matrix) / (B * x.shape[1])
+
+    # Inside vae_loss_sinkhorn, right before computing P
+    if sinkhorn_iters == 0:
+        # FAST O(N) BYPASS: Direct 1-to-1 matching
+        loss_xy = torch.sum((pred_xy - gt_xy) ** 2, dim=-1)
+        loss_scale = torch.sum((pred_scale - gt_scale) ** 2, dim=-1)
+        loss_rot = (1 - torch.cos(pred_rot - gt_rot)).squeeze(-1)
+        loss_color = torch.sum((pred_color - gt_color) ** 2, dim=-1)
+        
+        # Element-wise sum mapped perfectly to your 10.0 / 1.0 / 0.5 weights
+        cost_array = 10.0 * loss_xy + 1.0 * loss_scale + 0.5 * loss_rot + 0.5 * loss_color
+        recon_loss = torch.mean(cost_array)
+    else:
+        # 2. Compute Soft Permutation Matrix (P) using Sinkhorn
+        P = sinkhorn_matching(cost_matrix, epsilon=sinkhorn_epsilon, max_iter=sinkhorn_iters)
+        recon_loss = torch.sum(P * cost_matrix) / (B * x.shape[1])
 
     
     # KL Divergence
