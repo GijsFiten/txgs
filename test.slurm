@@ -14,7 +14,7 @@
 
 source ~/.bashrc
 source /data/leuven/366/vsc36675/miniconda3/etc/profile.d/conda.sh
-cd /data/leuven/366/vsc36675/txgs
+cd /data/leuven/366/vsc36675/code/txgs
 conda activate gsplat
 
 nvidia-smi
