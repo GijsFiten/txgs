@@ -236,7 +236,7 @@ def create_train_val_dataloaders(data_dir, batch_size=32, validation_split=0.05,
         batch_size=batch_size,
         shuffle=(shuffle and not is_distributed), 
         sampler=train_sampler, 
-        num_workers=4,
+        num_workers=8,
         pin_memory=True,
         drop_last=True 
     )
@@ -247,7 +247,7 @@ def create_train_val_dataloaders(data_dir, batch_size=32, validation_split=0.05,
         batch_size=batch_size,
         shuffle=False, 
         sampler=val_sampler, 
-        num_workers=4,
+        num_workers=8,
         pin_memory=True,
         drop_last=False
     )

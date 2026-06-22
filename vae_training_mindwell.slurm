@@ -22,6 +22,6 @@ conda activate txgs
 nvidia-smi
 nvcc -V
 
-# 4 GPUs on a single node: optimize threads
+# 8 GPUs on a single node: optimize threads
 export OMP_NUM_THREADS=16
 torchrun --standalone --nproc_per_node=8 ./vae_training.py --config config/vae_training_mw.yaml
