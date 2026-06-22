@@ -3,6 +3,16 @@ import torch
 from utils.diffusion_data_helper import denormalize_data
 from utils.image_utils import render_and_save
 
+def _safe_render_and_save(xy, scale, rot, feat, filename, img_size):
+    try:
+        render_and_save(xy, scale, rot, feat, filename, img_size)
+    except Exception as e:
+        print(f"[Rendering] Failed to render {filename}: {e}")
+        try:
+            torch.cuda.synchronize()
+        except Exception:
+            pass
+
 def sample_from_latent(model, device, cfg, num_samples=5, epoch=None):
     """Sample from the VAE latent space and render"""
     model.eval()
@@ -33,8 +43,8 @@ def sample_from_latent(model, device, cfg, num_samples=5, epoch=None):
             epoch_suffix = f"_epoch{epoch}" if epoch is not None else ""
             filename = f"{cfg['output_dir']}/vae_sample_{i}{epoch_suffix}"
             
-            render_and_save(xy, scale, rot, feat, filename, img_size)
-    
+            _safe_render_and_save(xy, scale, rot, feat, filename, img_size)
+
     model.train()
 
 def visualize_reconstruction(model, dataloader, device, cfg, epoch=None):
@@ -68,8 +78,8 @@ def visualize_reconstruction(model, dataloader, device, cfg, epoch=None):
         epoch_suffix = f"_epoch{epoch}" if epoch is not None else ""
         filename = f"{cfg['output_dir']}/vae_recon{epoch_suffix}"
         
-        render_and_save(xy, scale, rot, feat, filename, img_size)
-    
+        _safe_render_and_save(xy, scale, rot, feat, filename, img_size)
+
     model.train()
 
 def save_target_visualization(dataloader, device, cfg):
@@ -98,4 +108,4 @@ def save_target_visualization(dataloader, device, cfg):
     img_size = (int(480), int(640))
     filename = f"{cfg['output_dir']}/target_ground_truth"
     
-    render_and_save(xy, scale, rot, feat, filename, img_size)
+    _safe_render_and_save(xy, scale, rot, feat, filename, img_size)
