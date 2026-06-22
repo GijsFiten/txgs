@@ -1,4 +1,4 @@
-data_dir: "./data/FFHQ/"
+data_dir: "/scratch/leuven/366/vsc36675/images/FFHQ"
 output_dir: "./output/FFHQ/"
 batch_size: 16
 grad_accumulation: 1
