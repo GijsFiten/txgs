@@ -207,6 +207,8 @@ def main():
         is_distributed=is_distributed
     )
     
+    if is_distributed:
+        dist.barrier()
     # Save target visualization (using validation set for stable reference)
     if is_main_process:
         # Skip if validation set is empty (e.g., when overfitting with validation_split=0.0)
@@ -215,7 +217,8 @@ def main():
         elif len(train_loader) > 0:
             # Fall back to training loader if validation is empty
             save_target_visualization(train_loader, device, cfg)
-
+    if is_distributed:
+        dist.barrier()
     # 2. Model
     model = GaussianVAE(
         num_gaussians=cfg["model"]["num_gaussians"],
