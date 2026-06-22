@@ -237,7 +237,7 @@ def vae_loss_sinkhorn(x_recon, x, mu, logvar, recon_weight=1.0, kl_weight=0.001,
         recon_loss = torch.mean(cost_array)
     else:
         # 2. Compute Soft Permutation Matrix (P) using Sinkhorn
-        P = sinkhorn_matching(cost_matrix, epsilon=sinkhorn_epsilon, max_iter=sinkhorn_iters)
+        P = sinkhorn_matching(cost_matrix, epsilon=sinkhorn_epsilon, max_iter=sinkhorn_iters).detach()
         recon_loss = torch.sum(P * cost_matrix) / (B * x.shape[1])
 
     

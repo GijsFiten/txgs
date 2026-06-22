@@ -191,6 +191,10 @@ def main():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         is_main_process = True
 
+    out_dir = cfg.get("output_dir", "./output/")
+    if is_main_process:
+        os.makedirs(out_dir, exist_ok=True)
+
     if is_main_process:
         print(f"Starting training on {device}...")
     
@@ -304,9 +308,9 @@ def main():
             # Checkpointing
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                if epoch > 50:
-                    # Save raw_model, not model
-                    torch.save(raw_model.state_dict(), "best_gaussian_vae.pth")
+                if epoch > 0:
+                    save_path = os.path.join(out_dir, "best_gaussian_vae.pth")
+                    torch.save(raw_model.state_dict(), save_path)
                     print(f"--> New best model saved (Val Loss: {best_val_loss:.4f})")
             
             # Log
@@ -342,14 +346,16 @@ def main():
                     visualize_reconstruction(raw_model, train_loader, device, cfg, epoch=epoch)
 
             # Checkpointing every 500 epochs
-            if epoch % cfg["logging"].get("model_save_rate", 500) == 0:
-                torch.save(raw_model.state_dict(), f"checkpoint_epoch_{epoch}.pth")
+            if epoch % cfg["logging"].get("model_save_rate", 20) == 0:
+                save_path = os.path.join(out_dir, f"checkpoint_epoch_{epoch}.pth")
+                torch.save(raw_model.state_dict(), save_path)
 
     # Final Wrap up
     if is_main_process:
         # Unwrap one last time to be sure
         raw_model: GaussianVAE = model.module if is_distributed else model # type: ignore
-        torch.save(raw_model.state_dict(), "final_vae_model.pth")
+        save_path = os.path.join(out_dir, "final_vae_model.pth")
+        torch.save(raw_model.state_dict(), save_path)
         print("Training Complete. Final model saved.")
         wandb.finish()
 
