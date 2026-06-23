@@ -1,0 +1,46 @@
+data_dir: "/scratch/leuven/366/vsc36675/images/FFHQ/"
+output_dir: "./output/FFHQ/"
+batch_size: 32
+grad_accumulation: 1
+overfit: false
+validation_split: 0.05
+
+# --- Resume settings ---
+resume_from: "./output/FFHQ/best_gaussian_vae.pth"
+# CHECK WANDB: set this to the epoch at which best_gaussian_vae.pth was saved
+# (look for the last val/loss improvement before the collapse at epoch ~95)
+resume_epoch: 90
+
+# --- Stability fix ---
+# Previous run collapsed when eps decayed to ~0.017 under bfloat16.
+# Floor at 0.03 keeps Sinkhorn numerically stable while still being tight.
+min_sinkhorn_eps: 0.03
+
+model:
+  num_gaussians: 5000
+  input_dim: 8
+  model_dim: 1024
+  decoder_transformer_layers: 8
+  decoder_transformer_heads: 8
+
+train:
+  # Number of ADDITIONAL epochs to train from the resume point.
+  # Increase this value (and the SLURM walltime) if you need more.
+  max_epochs: 50
+
+  base_lr: 0.0005
+  lr_warmup_epochs: 100   # must match original run so fast-forward is correct
+
+  target_recon_weight: 1.0
+
+  target_kl_weight: 0.0001
+  kl_disabled_epochs: 10
+  kl_warmup_epochs: 15
+
+  sinkhorn_warmup_epochs: 100
+  clip_norm: 1.0
+
+logging:
+  sample_save_rate: 5000 # skip saving samples for now, since we have a lot of them and they take up space
+  reconstruct_save_rate: 1000 # save reconstructions more frequently so you can monitor progress
+  model_save_rate: 10   # save more frequently so you have fine-grained checkpoints

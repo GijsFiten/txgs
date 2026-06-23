@@ -33,17 +33,19 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_schedul
     kl_warmup_steps = cfg["train"].get("kl_warmup_epochs", 500) * steps_per_epoch
     target_kl = cfg["train"].get("target_kl_weight", 0.001)
 
+    min_sinkhorn_eps = cfg.get("min_sinkhorn_eps", 0.001)
+
     progress = global_step / max(1, total_steps)
-    sinkhorn_eps = max(0.001, 0.5 * math.exp(-5.0 * progress))
-    
+    sinkhorn_eps = max(min_sinkhorn_eps, 0.5 * math.exp(-5.0 * progress))
+
     sinkhorn_iters = int(10 + 40 * min(1.0, progress * 2.0))
 
     # Progress bar for the epoch
     pbar = tqdm(dataloader, desc=f"Epoch {epoch}", leave=False)
-    
+
     for batch_idx, batch in enumerate(pbar):
         global_step += 1
-        
+
         # 1. Dynamic KL Weight Calculation
         if overfit or global_step <= kl_disabled_steps:
             kl_weight = 0.0
@@ -51,10 +53,9 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_schedul
             warmup_progress = (global_step - kl_disabled_steps) / max(1, kl_warmup_steps)
             kl_weight = min(target_kl, target_kl * warmup_progress)
 
-        # 2. Dynamic Sinkhorn Epsilon Calculation (Exponential decay based on training progress)
+        # 2. Dynamic Sinkhorn Epsilon (exponential decay, floored at min_sinkhorn_eps)
         progress = global_step / max(1, total_steps)
-        # Decays from 0.5 smoothly down to ~0.003 by the end of training
-        sinkhorn_eps = max(0.001, 0.5 * math.exp(-5.0 * progress))
+        sinkhorn_eps = max(min_sinkhorn_eps, 0.5 * math.exp(-5.0 * progress))
         
         x = batch.to(device)
 
@@ -198,13 +199,15 @@ def main():
     if is_main_process:
         print(f"Starting training on {device}...")
     
+    split_cache = os.path.join(cfg.get("output_dir", "./output/"), "val_split.txt")
     train_loader, val_loader, train_sampler, val_sampler = create_train_val_dataloaders(
-        cfg["data_dir"], 
-        batch_size=cfg["batch_size"], 
-        validation_split=cfg.get("validation_split", 0.05), # Default 5%
-        shuffle=True if not overfit else False, 
-        augment=cfg.get("augment", False), # Enable augmentation if config says so, default False based on previous logic 
-        is_distributed=is_distributed
+        cfg["data_dir"],
+        batch_size=cfg["batch_size"],
+        validation_split=cfg.get("validation_split", 0.05),
+        shuffle=True if not overfit else False,
+        augment=cfg.get("augment", False),
+        is_distributed=is_distributed,
+        split_cache_path=split_cache if is_main_process else None,
     )
     
     if is_distributed:
@@ -237,27 +240,40 @@ def main():
     print(f"Model initialized: {total_params / 1e6:.2f}M Params")
 
     # 3. Optimization Components
-    optimizer = optim.AdamW(model.parameters(), lr=cfg["train"]["base_lr"], weight_decay=1e-4 if not overfit else 0.0)  # No weight decay for overfitting
-    
-    # Calculate step equivalents
+    optimizer = optim.AdamW(model.parameters(), lr=cfg["train"]["base_lr"], weight_decay=1e-4 if not overfit else 0.0)
+
+    # Calculate step equivalents.
+    # When resuming, total_steps spans the full arc (past + future) so Sinkhorn/LR
+    # schedules are continuous rather than restarted from zero.
     steps_per_epoch = len(train_loader)
-    total_steps = cfg["train"]["max_epochs"] * steps_per_epoch
+    start_epoch = cfg.get("resume_epoch", 0)
+    total_steps = (start_epoch + cfg["train"]["max_epochs"]) * steps_per_epoch
     warmup_steps = cfg["train"]["lr_warmup_epochs"] * steps_per_epoch
-    
-    # Custom Warmup Scheduler (Now operating on STEPS)
+
     lr_scheduler = get_warmup_cosine_scheduler(
-        optimizer, 
-        lr_warmup_epochs=warmup_steps, 
+        optimizer,
+        lr_warmup_epochs=warmup_steps,
         max_epochs=total_steps,
         target_recon_weight=cfg["train"].get("target_recon_weight", 1.0)
     )
 
-    # Initialize global step tracker
+    # Resume from checkpoint if specified
     global_step = 0
+    raw_model: GaussianVAE = model.module if is_distributed else model  # type: ignore
+    if cfg.get("resume_from"):
+        resume_path = cfg["resume_from"]
+        if is_main_process:
+            print(f"Resuming from {resume_path} (epoch {start_epoch})...")
+        raw_model.load_state_dict(torch.load(resume_path, map_location=device))
+        global_step = start_epoch * steps_per_epoch
+        # Fast-forward the LR scheduler without touching the optimizer
+        for _ in range(global_step):
+            lr_scheduler.step()
+        if is_main_process:
+            print(f"LR scheduler fast-forwarded to step {global_step}, LR={optimizer.param_groups[0]['lr']:.6f}")
 
-    # Let's save the reconstruction from the initial model before training starts
-    if is_main_process:
-        raw_model: GaussianVAE = model.module if is_distributed else model # type: ignore
+    # Save a reconstruction preview only on fresh starts (not resumptions)
+    if is_main_process and start_epoch == 0:
         if len(val_loader) > 0:
             visualize_reconstruction(raw_model, val_loader, device, cfg, epoch=0)
         elif len(train_loader) > 0:
@@ -269,7 +285,7 @@ def main():
     best_val_loss = float('inf')
 
     # --- Main Loop ---
-    for epoch in range(1, cfg["train"]["max_epochs"] + 1):
+    for epoch in range(start_epoch + 1, start_epoch + cfg["train"]["max_epochs"] + 1):
         if is_distributed and train_sampler is not None:
             train_sampler.set_epoch(epoch)
         

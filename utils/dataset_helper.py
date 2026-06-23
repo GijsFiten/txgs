@@ -195,27 +195,37 @@ def create_dataloaders(data_dir, batch_size=32, num_points=1000, shuffle=True, a
     return dataloader, sampler
 
 
-def create_train_val_dataloaders(data_dir, batch_size=32, validation_split=0.05, shuffle=True, augment=True, is_distributed=False):
-    all_files = glob.glob(os.path.join(data_dir, "*.npz"))
-    
-    # Deterministic shuffle for splitting
-    # We sort first to ensure order before shuffle across different processes, then use fixed seed
-    all_files.sort()
-    rng = np.random.RandomState(42)
-    rng.shuffle(all_files)
-    
-    val_size = int(len(all_files) * validation_split)
-    
-    # Check if dataset is empty
-    if len(all_files) == 0:
-        print(f"Warning: No files found in {data_dir}")
-        train_files = []
-        val_files = []
+def create_train_val_dataloaders(data_dir, batch_size=32, validation_split=0.05, shuffle=True, augment=True, is_distributed=False, split_cache_path=None):
+    if split_cache_path and os.path.exists(split_cache_path):
+        with open(split_cache_path, "r") as f:
+            val_files = [line.strip() for line in f if line.strip()]
+        all_files = glob.glob(os.path.join(data_dir, "*.npz"))
+        val_set = set(val_files)
+        train_files = [p for p in all_files if p not in val_set]
+        print(f"Loaded split from {split_cache_path}: {len(train_files)} training, {len(val_files)} validation files")
     else:
-        train_files = all_files[val_size:]
-        val_files = all_files[:val_size]
-    
-    print(f"Dataset split: {len(train_files)} training, {len(val_files)} validation files")
+        all_files = glob.glob(os.path.join(data_dir, "*.npz"))
+        all_files.sort()
+        rng = np.random.RandomState(42)
+        rng.shuffle(all_files)
+
+        val_size = int(len(all_files) * validation_split)
+
+        if len(all_files) == 0:
+            print(f"Warning: No files found in {data_dir}")
+            train_files = []
+            val_files = []
+        else:
+            train_files = all_files[val_size:]
+            val_files = all_files[:val_size]
+
+        if split_cache_path and len(val_files) > 0:
+            os.makedirs(os.path.dirname(split_cache_path) or ".", exist_ok=True)
+            with open(split_cache_path, "w") as f:
+                f.write("\n".join(val_files))
+            print(f"Saved split to {split_cache_path}")
+
+        print(f"Dataset split: {len(train_files)} training, {len(val_files)} validation files")
 
     # Train dataset (with augmentation)
     train_dataset = GaussianSplatDataset(data_dir, augment=augment, file_paths=train_files) # Augmentation can be turned on later if needed
