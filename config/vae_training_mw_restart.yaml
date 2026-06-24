@@ -1,19 +1,19 @@
 data_dir: "/scratch/leuven/366/vsc36675/images/FFHQ/"
-output_dir: "./output/FFHQ_restart/"
+output_dir: "./output/FFHQ_restart2/"
 batch_size: 32
 grad_accumulation: 1
 overfit: false
 validation_split: 0.05
 
 # --- Resume settings ---
-resume_from: "./output/FFHQ/best_gaussian_vae.pth"
-resume_epoch: 140
+resume_from: "./output/FFHQ_restart/best_gaussian_vae.pth"
+resume_epoch: 190
 
 # --- Sinkhorn epsilon schedule ---
-# Linear decay from eps_start → eps_end over eps_decay_epochs, measured from the resume point.
-# Previous run collapsed at ~0.017 (bfloat16); start safely at 0.03 and decay slowly.
-sinkhorn_eps_start: 0.03
-sinkhorn_eps_end: 0.015
+# Epoch 190 ended at eps ≈ 0.0225 (halfway through the previous 0.03→0.015 decay).
+# Continue tightening at the same pace: 0.0225 → 0.012 over 100 epochs.
+sinkhorn_eps_start: 0.0225
+sinkhorn_eps_end: 0.012
 sinkhorn_eps_decay_epochs: 100
 
 model:
