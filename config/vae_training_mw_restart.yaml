@@ -1,5 +1,5 @@
 data_dir: "/scratch/leuven/366/vsc36675/images/FFHQ/"
-output_dir: "./output/FFHQ/"
+output_dir: "./output/FFHQ_restart/"
 batch_size: 32
 grad_accumulation: 1
 overfit: false
@@ -7,14 +7,18 @@ validation_split: 0.05
 
 # --- Resume settings ---
 resume_from: "./output/FFHQ/best_gaussian_vae.pth"
-# CHECK WANDB: set this to the epoch at which best_gaussian_vae.pth was saved
-# (look for the last val/loss improvement before the collapse at epoch ~95)
-resume_epoch: 90
+resume_epoch: 140
 
 # --- Stability fix ---
 # Previous run collapsed when eps decayed to ~0.017 under bfloat16.
 # Floor at 0.03 keeps Sinkhorn numerically stable while still being tight.
 min_sinkhorn_eps: 0.03
+
+# --- Perceptual loss ---
+# Requires gsplat compiled for sm_100: TORCH_CUDA_ARCH_LIST="10.0" pip install --no-build-isolation -e ./gsplat/
+# Set to 0.0 to disable (falls back gracefully if gsplat fails at runtime).
+perceptual_weight: 0.1
+perceptual_render_size: [256, 256]
 
 model:
   num_gaussians: 5000

@@ -13,12 +13,12 @@ import argparse
 from tqdm import tqdm
 
 from utils.dataset_helper import create_dataloaders, create_train_val_dataloaders
-from vae_model import GaussianVAE, vae_loss_sinkhorn
+from vae_model import GaussianVAE, vae_loss_sinkhorn, build_perceptual_model, perceptual_loss_render
 from utils.training_utils import get_warmup_cosine_scheduler
 from utils.vae_utils import sample_from_latent, save_target_visualization, visualize_reconstruction
 import yaml
 
-def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_scheduler, global_step, total_steps):
+def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_scheduler, global_step, total_steps, perceptual_model=None):
     model.train()
     epoch_loss = 0
     epoch_recon_loss = 0
@@ -67,16 +67,24 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_schedul
                 x_recon, mu, logvar = model(x, use_sampling=True if not overfit else False)
 
                 loss, recon_loss, kl_loss = vae_loss_sinkhorn(
-                    x_recon, x, mu, logvar, 
-                    recon_weight=1.0, 
+                    x_recon, x, mu, logvar,
+                    recon_weight=1.0,
                     kl_weight=kl_weight,
                     sinkhorn_epsilon=sinkhorn_eps,
                     sinkhorn_iters=sinkhorn_iters
                 )
-                
+
                 loss = loss / cfg["grad_accumulation"]
-            
-            # The backward pass sits OUTSIDE the autocast block!
+
+            # Perceptual loss in fp32, outside autocast (LPIPS + gsplat need fp32)
+            perc_loss_val = 0.0
+            if perceptual_model is not None:
+                perc_weight = cfg.get("perceptual_weight", 0.0)
+                perc_size   = tuple(cfg.get("perceptual_render_size", [128, 128]))
+                perc        = perceptual_loss_render(x_recon, x, perceptual_model, perc_size)
+                loss        = loss + perc_weight * perc / cfg["grad_accumulation"]
+                perc_loss_val = perc.item()
+
             loss.backward()
         
         # Gradient accumulation step
@@ -90,6 +98,7 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_schedul
             if not dist.is_initialized() or dist.get_rank() == 0:
                 wandb.log({
                     "train/step_loss": loss.item() * cfg["grad_accumulation"],
+                    "train/step_perceptual_loss": perc_loss_val,
                     "step_kl_weight": kl_weight,
                     "step_sinkhorn_eps": sinkhorn_eps,
                     "step_learning_rate": optimizer.param_groups[0]['lr'],
@@ -279,6 +288,14 @@ def main():
         elif len(train_loader) > 0:
             visualize_reconstruction(raw_model, train_loader, device, cfg, epoch=0)
 
+    # Perceptual model (frozen, one copy per GPU)
+    perceptual_model = None
+    if cfg.get("perceptual_weight", 0.0) > 0:
+        perceptual_model = build_perceptual_model(device)
+        if is_main_process and perceptual_model is not None:
+            print(f"Perceptual loss enabled (weight={cfg['perceptual_weight']}, "
+                  f"render_size={cfg.get('perceptual_render_size', [128, 128])})")
+
     # 4. Logging
     if is_main_process:
         wandb.init(project="gaussian-vae", config=cfg)
@@ -305,7 +322,8 @@ def main():
         sinkhorn_eps = max(0.001, 0.5 * (0.995 ** epoch)) 
               
         avg_loss, avg_recon, avg_kl, global_step = train_one_epoch(
-            model, train_loader, optimizer, device, epoch, cfg, lr_scheduler, global_step, total_steps
+            model, train_loader, optimizer, device, epoch, cfg, lr_scheduler, global_step, total_steps,
+            perceptual_model=perceptual_model
         )
         current_lr = optimizer.param_groups[0]['lr']
         

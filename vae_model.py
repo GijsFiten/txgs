@@ -8,6 +8,12 @@ from utils.diffusion_data_helper import denormalize_data
 from utils.image_utils import render
 from fused_ssim import fused_ssim
 
+try:
+    import lpips as lpips_lib
+    _LPIPS_AVAILABLE = True
+except ImportError:
+    _LPIPS_AVAILABLE = False
+
 
 # This is a VAE model which takes in 2D Gaussian splats and encodes them into a latent space
 # For now we always take in a fixed number of gaussians (e.g., 1000)
@@ -276,6 +282,46 @@ def sinkhorn_matching(cost_matrix, epsilon=0.1, max_iter=50):
         # 2. Column normalization in log space
         log_sum_cols = torch.logsumexp(log_P, dim=1, keepdim=True)
         log_P = log_P - log_sum_cols
-        
+
     # Convert back to probability space for the final multiplication
     return torch.exp(log_P)
+
+
+def build_perceptual_model(device):
+    """Returns a frozen LPIPS model, or None if lpips is not installed."""
+    if not _LPIPS_AVAILABLE:
+        print("Warning: lpips not installed — perceptual loss disabled.")
+        return None
+    model = lpips_lib.LPIPS(net="vgg").to(device)
+    for p in model.parameters():
+        p.requires_grad = False
+    return model
+
+
+def perceptual_loss_render(x_recon, x_gt, perceptual_model, img_size=(128, 128)):
+    """
+    Renders the first Gaussian sample from x_recon and x_gt, then returns LPIPS.
+    Only one sample per call — caller is responsible for batching strategy.
+    Falls back to zero if the gsplat kernel fails (e.g. wrong compute capability).
+    """
+    try:
+        def _to_image(sample):
+            xy, scale, rot, feat = denormalize_data(
+                sample[:, 0:2], sample[:, 2:4], sample[:, 4:5], sample[:, 5:8]
+            )
+            img = render(
+                xy.float().contiguous(), scale.float().contiguous(),
+                rot.float().contiguous(), feat.float().contiguous(),
+                img_size=img_size
+            )
+            return img.unsqueeze(0)  # [1, 3, H, W]
+
+        img_recon = _to_image(x_recon[0])
+        with torch.no_grad():
+            img_gt = _to_image(x_gt[0].detach())
+
+        # LPIPS expects float32 in [-1, 1]
+        return perceptual_model(img_recon * 2 - 1, img_gt * 2 - 1).mean()
+
+    except Exception as e:
+        return torch.tensor(0.0, device=x_recon.device)
