@@ -9,16 +9,12 @@ validation_split: 0.05
 resume_from: "./output/FFHQ/best_gaussian_vae.pth"
 resume_epoch: 140
 
-# --- Stability fix ---
-# Previous run collapsed when eps decayed to ~0.017 under bfloat16.
-# Floor at 0.03 keeps Sinkhorn numerically stable while still being tight.
-min_sinkhorn_eps: 0.03
-
-# --- Perceptual loss ---
-# Requires gsplat compiled for sm_100: TORCH_CUDA_ARCH_LIST="10.0" pip install --no-build-isolation -e ./gsplat/
-# Set to 0.0 to disable (falls back gracefully if gsplat fails at runtime).
-perceptual_weight: 0.1
-perceptual_render_size: [256, 256]
+# --- Sinkhorn epsilon schedule ---
+# Linear decay from eps_start → eps_end over eps_decay_epochs, measured from the resume point.
+# Previous run collapsed at ~0.017 (bfloat16); start safely at 0.03 and decay slowly.
+sinkhorn_eps_start: 0.03
+sinkhorn_eps_end: 0.015
+sinkhorn_eps_decay_epochs: 100
 
 model:
   num_gaussians: 5000
@@ -41,10 +37,9 @@ train:
   kl_disabled_epochs: 10
   kl_warmup_epochs: 15
 
-  sinkhorn_warmup_epochs: 100
   clip_norm: 1.0
 
 logging:
-  sample_save_rate: 5000 # skip saving samples for now, since we have a lot of them and they take up space
-  reconstruct_save_rate: 1000 # save reconstructions more frequently so you can monitor progress
-  model_save_rate: 10   # save more frequently so you have fine-grained checkpoints
+  sample_save_rate: 5000      # effectively disabled for a 50-epoch run
+  reconstruct_save_rate: 5    # reconstruction image every 5 epochs
+  model_save_rate: 10         # checkpoint every 10 epochs

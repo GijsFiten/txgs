@@ -13,12 +13,12 @@ import argparse
 from tqdm import tqdm
 
 from utils.dataset_helper import create_dataloaders, create_train_val_dataloaders
-from vae_model import GaussianVAE, vae_loss_sinkhorn, build_perceptual_model, perceptual_loss_render
+from vae_model import GaussianVAE, vae_loss_sinkhorn
 from utils.training_utils import get_warmup_cosine_scheduler
 from utils.vae_utils import sample_from_latent, save_target_visualization, visualize_reconstruction
 import yaml
 
-def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_scheduler, global_step, total_steps, perceptual_model=None):
+def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_scheduler, global_step, total_steps, sinkhorn_eps=0.1):
     model.train()
     epoch_loss = 0
     epoch_recon_loss = 0
@@ -26,18 +26,14 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_schedul
     valid_batches = 0
     
     overfit = cfg.get("overfit", False)
-    
+
     # Pull step configurations
     steps_per_epoch = len(dataloader)
     kl_disabled_steps = cfg["train"].get("kl_disabled_epochs", 0) * steps_per_epoch
     kl_warmup_steps = cfg["train"].get("kl_warmup_epochs", 500) * steps_per_epoch
     target_kl = cfg["train"].get("target_kl_weight", 0.001)
 
-    min_sinkhorn_eps = cfg.get("min_sinkhorn_eps", 0.001)
-
     progress = global_step / max(1, total_steps)
-    sinkhorn_eps = max(min_sinkhorn_eps, 0.5 * math.exp(-5.0 * progress))
-
     sinkhorn_iters = int(10 + 40 * min(1.0, progress * 2.0))
 
     # Progress bar for the epoch
@@ -53,10 +49,7 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_schedul
             warmup_progress = (global_step - kl_disabled_steps) / max(1, kl_warmup_steps)
             kl_weight = min(target_kl, target_kl * warmup_progress)
 
-        # 2. Dynamic Sinkhorn Epsilon (exponential decay, floored at min_sinkhorn_eps)
         progress = global_step / max(1, total_steps)
-        sinkhorn_eps = max(min_sinkhorn_eps, 0.5 * math.exp(-5.0 * progress))
-        
         x = batch.to(device)
 
         should_sync = ((batch_idx + 1) % cfg["grad_accumulation"] == 0)
@@ -76,15 +69,6 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_schedul
 
                 loss = loss / cfg["grad_accumulation"]
 
-            # Perceptual loss in fp32, outside autocast (LPIPS + gsplat need fp32)
-            perc_loss_val = 0.0
-            if perceptual_model is not None:
-                perc_weight = cfg.get("perceptual_weight", 0.0)
-                perc_size   = tuple(cfg.get("perceptual_render_size", [128, 128]))
-                perc        = perceptual_loss_render(x_recon, x, perceptual_model, perc_size)
-                loss        = loss + perc_weight * perc / cfg["grad_accumulation"]
-                perc_loss_val = perc.item()
-
             loss.backward()
         
         # Gradient accumulation step
@@ -98,7 +82,6 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, cfg, lr_schedul
             if not dist.is_initialized() or dist.get_rank() == 0:
                 wandb.log({
                     "train/step_loss": loss.item() * cfg["grad_accumulation"],
-                    "train/step_perceptual_loss": perc_loss_val,
                     "step_kl_weight": kl_weight,
                     "step_sinkhorn_eps": sinkhorn_eps,
                     "step_learning_rate": optimizer.param_groups[0]['lr'],
@@ -288,14 +271,6 @@ def main():
         elif len(train_loader) > 0:
             visualize_reconstruction(raw_model, train_loader, device, cfg, epoch=0)
 
-    # Perceptual model (frozen, one copy per GPU)
-    perceptual_model = None
-    if cfg.get("perceptual_weight", 0.0) > 0:
-        perceptual_model = build_perceptual_model(device)
-        if is_main_process and perceptual_model is not None:
-            print(f"Perceptual loss enabled (weight={cfg['perceptual_weight']}, "
-                  f"render_size={cfg.get('perceptual_render_size', [128, 128])})")
-
     # 4. Logging
     if is_main_process:
         wandb.init(project="gaussian-vae", config=cfg)
@@ -319,11 +294,16 @@ def main():
             warmup_progress = (epoch - kl_disabled_epochs) / kl_warmup_epochs
             kl_weight = min(target_kl, target_kl * warmup_progress)
 
-        sinkhorn_eps = max(0.001, 0.5 * (0.995 ** epoch)) 
-              
+        # Linear epsilon decay: eps_start → eps_end over eps_decay_epochs from the resume point
+        _eps_start  = cfg.get("sinkhorn_eps_start",        0.03)
+        _eps_end    = cfg.get("sinkhorn_eps_end",          0.015)
+        _eps_epochs = cfg.get("sinkhorn_eps_decay_epochs", 100)
+        _t = min(1.0, max(0.0, (epoch - start_epoch) / max(1, _eps_epochs)))
+        sinkhorn_eps = _eps_start + (_eps_end - _eps_start) * _t
+
         avg_loss, avg_recon, avg_kl, global_step = train_one_epoch(
             model, train_loader, optimizer, device, epoch, cfg, lr_scheduler, global_step, total_steps,
-            perceptual_model=perceptual_model
+            sinkhorn_eps=sinkhorn_eps
         )
         current_lr = optimizer.param_groups[0]['lr']
         

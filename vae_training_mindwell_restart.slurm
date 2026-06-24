@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=gaussian_vae_ffhq_restart
 #SBATCH --account=lp_emediaxr
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --clusters=mindwell
 #SBATCH --partition=gpu_b200
 #SBATCH --nodes=1
@@ -22,7 +22,8 @@ conda activate txgs
 nvidia-smi
 nvcc -V
 
+# 50 epochs × ~28 min/epoch ≈ 23 h — 24 h gives a comfortable margin.
 # To train more epochs: increase max_epochs in config/vae_training_mw_restart.yaml
-# and bump --time above proportionally (~28 min per epoch on 8 B200s).
+# and bump --time proportionally.
 export OMP_NUM_THREADS=16
 torchrun --standalone --nproc_per_node=8 ./vae_training.py --config config/vae_training_mw_restart.yaml
